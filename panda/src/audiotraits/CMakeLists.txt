@@ -1,11 +1,11 @@
 if(NOT HAVE_AUDIO)
   return()
-elseif(NOT HAVE_FMODEX AND NOT HAVE_OPENAL)
+elseif(NOT HAVE_FMOD AND NOT HAVE_OPENAL)
   message(SEND_ERROR
     "You must have an audio backend for audio support! Turn off HAVE_AUDIO to ignore this.")
 endif()
 
-if(HAVE_FMODEX AND NOT (APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"))
+if(HAVE_FMOD AND NOT (APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"))
   set(P3FMOD_HEADERS
     config_fmodAudio.h
     fmodAudioManager.h
@@ -19,9 +19,10 @@ if(HAVE_FMODEX AND NOT (APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"))
   composite_sources(p3fmod_audio P3FMOD_SOURCES)
   add_library(p3fmod_audio ${MODULE_TYPE} ${P3FMOD_HEADERS} ${P3FMOD_SOURCES})
   set_target_properties(p3fmod_audio PROPERTIES DEFINE_SYMBOL BUILDING_FMOD_AUDIO)
-  target_link_libraries(p3fmod_audio panda PKG::FMODEX)
+  target_link_libraries(p3fmod_audio panda PKG::FMOD)
 
   if(APPLE)
+    # TODO: Determine if this is still needed for new FMOD Core library
     # The FMOD EX thirdparty library is not available for arm64, so we have to
     # exclude it from the target architectures.
     get_target_property(_archs p3fmod_audio OSX_ARCHITECTURES)
