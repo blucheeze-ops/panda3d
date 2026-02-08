@@ -831,29 +831,32 @@ update_dsp_chain(FMOD::DSP *head, FilterProperties *config) {
   const FilterProperties::ConfigVector &conf = config->get_config();
   FMOD_RESULT result;
 
-  while (1) {
-    int numinputs;
-    result = head->getNumInputs(&numinputs);
-    fmod_audio_errcheck("head->getNumInputs()", result);
-    if (numinputs != 1) {
-      break;
-    }
-    FMOD::DSP *prev;
-    result = head->getInput(0, &prev, nullptr);
-    fmod_audio_errcheck("head->getInput()", result);
+  // FMOD Core API: Use ChannelGroup DSP list instead of traversing DSP graph
+  // Get the number of DSPs in the channel group
+  int numdsps = 0;
+  result = _channelgroup->getNumDSPs(&numdsps);
+  fmod_audio_errcheck("_channelgroup->getNumDSPs()", result);
+
+  // Remove user DSPs by iterating backwards (to avoid index shifting)
+  for (int i = numdsps - 1; i >= 0; i--) {
+    FMOD::DSP *dsp;
+    result = _channelgroup->getDSP(i, &dsp);
+    fmod_audio_errcheck("_channelgroup->getDSP()", result);
+
     void *userdata;
-    result = prev->getUserData(&userdata);
-    fmod_audio_errcheck("prev->getUserData()", result);
-    if (userdata != USER_DSP_MAGIC) {
-      break;
+    result = dsp->getUserData(&userdata);
+    fmod_audio_errcheck("dsp->getUserData()", result);
+
+    if (userdata == USER_DSP_MAGIC) {
+      // This is a user DSP, remove it
+      result = _channelgroup->removeDSP(dsp);
+      fmod_audio_errcheck("_channelgroup->removeDSP()", result);
+      result = dsp->release();
+      fmod_audio_errcheck("dsp->release()", result);
     }
-    // FMOD Core API: Use ChannelControl::removeDSP instead of DSP::remove
-    result = _channelgroup->removeDSP(prev);
-    fmod_audio_errcheck("_channelgroup->removeDSP()", result);
-    result = prev->release();
-    fmod_audio_errcheck("prev->release()", result);
   }
 
+  // Add new DSPs from the config
   for (int i=0; i<(int)(conf.size()); i++) {
     FMOD::DSP *dsp = make_dsp(conf[i]);
     result = _channelgroup->addDSP(i, dsp);

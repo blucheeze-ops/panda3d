@@ -9,6 +9,7 @@ from panda3d.core import *
 from direct.showbase.DirectObject import DirectObject
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
+import random
 
 
 # Function to put instructions on the screen.
@@ -34,11 +35,15 @@ class MediaPlayer(ShowBase):
         # Initialize pause state
         self.is_paused = False
 
+        # Track active filters
+        self.active_filters = []
+
         self.title = addTitle("Panda3D: Tutorial - Media Player")
         self.inst1 = addInstructions(0.06, "P: Play/Pause")
         self.inst2 = addInstructions(0.12, "S: Stop and Rewind")
-        self.inst3 = addInstructions(0.18,
-            "M: Slow Motion / Normal Motion toggle")
+        self.inst3 = addInstructions(0.18, "M: Slow Motion / Normal Motion toggle")
+        self.inst4 = addInstructions(0.24, "F: Add Random Audio Filter")
+        self.inst5 = addInstructions(0.30, "C: Clear All Filters")
 
         # Load the texture. We could use loader.loadTexture for this,
         # but we want to make sure we get a MovieTexture, since it
@@ -70,6 +75,10 @@ class MediaPlayer(ShowBase):
         self.accept('S', self.stopsound)
         self.accept('m', self.fastforward)
         self.accept('M', self.fastforward)
+        self.accept('f', self.add_random_filter)
+        self.accept('F', self.add_random_filter)
+        self.accept('c', self.clear_filters)
+        self.accept('C', self.clear_filters)
 
     def stopsound(self):
         self.sound.stop()
@@ -97,6 +106,44 @@ class MediaPlayer(ShowBase):
             # Start playing for the first time
             self.sound.play()
             self.is_paused = False
+
+    def add_random_filter(self):
+        """Add an echo DSP filter effect to the audio"""
+        # Create FilterProperties and add echo filter
+        # add_echo(drymix, wetmix, delay, decayratio)
+        filter_props = FilterProperties()
+        filter_props.add_echo(0.8, 0.5, 300.0, 0.5)
+
+        # Apply to the audio manager
+        if self.sfxManagerList:
+            manager = self.sfxManagerList[0]
+            manager.configure_filters(filter_props)
+            self.active_filters.append('echo')
+            print(f"Applied echo filter (total: {len(self.active_filters)})")
+
+    def clear_filters(self):
+        """Remove all DSP filters"""
+        if self.sfxManagerList:
+            manager = self.sfxManagerList[0]
+
+            # Apply empty FilterProperties to clear all filters
+            filter_props = FilterProperties()
+            manager.configure_filters(filter_props)
+            self.active_filters.clear()
+
+            # Restart playback to flush FMOD's DSP buffers (which still contain
+            # processed audio with the old effects) - do this even if paused
+            if self.sound.status() == AudioSound.PLAYING:
+                current_time = self.sound.getTime()
+                was_paused = self.is_paused
+                self.sound.stop()
+                self.sound.setTime(current_time)
+                self.sound.play()
+                # Restore pause state if needed
+                if was_paused:
+                    self.sound.setPlayRate(0.0)
+
+            print(f"Cleared all filters (total: {len(self.active_filters)})")
 
 player = MediaPlayer("PandaSneezes.ogv")
 player.run()

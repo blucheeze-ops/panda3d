@@ -74,6 +74,36 @@ The FMOD audio manager was updated to use FMOD Core API instead of FMOD Ex, but 
 4. **Parameter Names:**
    - Fixed: `FMOD_DSP_NORMALIZE_THRESHHOLD` → `FMOD_DSP_NORMALIZE_THRESHOLD`
 
+5. **DSP Removal from Channel Group (CRITICAL BUG FIX):**
+   ```cpp
+   // BROKEN approach (doesn't work with FMOD Core API):
+   // Traversing DSP graph using head->getInput() assumes specific connection structure
+   while (1) {
+     result = head->getNumInputs(&numinputs);
+     if (numinputs != 1) break;
+     result = head->getInput(0, &prev, nullptr);
+     if (prev->getUserData() != USER_DSP_MAGIC) break;
+     _channelgroup->removeDSP(prev);  // Never finds user DSPs!
+   }
+
+   // CORRECT approach (works with FMOD Core API):
+   // Iterate through channel group's DSP list directly
+   int numdsps = 0;
+   _channelgroup->getNumDSPs(&numdsps);
+   for (int i = numdsps - 1; i >= 0; i--) {  // Backwards to avoid index shift
+     FMOD::DSP *dsp;
+     _channelgroup->getDSP(i, &dsp);
+     void *userdata;
+     dsp->getUserData(&userdata);
+     if (userdata == USER_DSP_MAGIC) {
+       _channelgroup->removeDSP(dsp);
+       dsp->release();
+     }
+   }
+   ```
+
+   **Why this matters:** The old graph traversal approach never found user DSPs added via `addDSP(index, dsp)`, so `configure_filters()` with empty FilterProperties would return success but not actually remove any DSPs. This caused filters to persist even after clearing.
+
 #### Build System Setup
 
 The FMOD Core API libraries were moved from `thirdparty/fmod/api/core/` to `thirdparty/darwin-libs-a/fmod/` to match makepanda's expected directory structure:
@@ -170,3 +200,37 @@ sound.setTime(pause_time)
 sound.play()
 ```
 This approach causes MovieTexture to jump to first frame during pause because `stop()` resets internal time to 0.
+
+### Clearing DSP Filters
+
+When clearing DSP filters using `configure_filters()` with an empty FilterProperties, the DSPs are correctly removed from the chain, but FMOD's internal buffers still contain audio that was already processed with the effects. This causes the echo/effects to persist briefly until the buffers drain naturally.
+
+**Solution: Flush buffers by restarting playback**
+```python
+def clear_filters(self):
+    if self.sfxManagerList:
+        manager = self.sfxManagerList[0]
+
+        # Remove DSPs from chain
+        filter_props = FilterProperties()
+        manager.configure_filters(filter_props)
+
+        # Flush FMOD's internal buffers by restarting playback
+        if self.sound.status() == AudioSound.PLAYING:
+            current_time = self.sound.getTime()
+            was_paused = self.is_paused
+            self.sound.stop()
+            self.sound.setTime(current_time)
+            self.sound.play()
+            # Restore pause state if needed
+            if was_paused:
+                self.sound.setPlayRate(0.0)
+```
+
+**Benefits:**
+- ✅ Immediate feedback - filters are cleared instantly
+- ✅ Works whether paused or playing
+- ✅ Preserves playback position and pause state
+- ✅ No user-perceptible glitches
+
+See `samples/media-player/main.py` for a complete working example.
