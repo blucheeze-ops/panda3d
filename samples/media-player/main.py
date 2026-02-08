@@ -1,12 +1,15 @@
 #!/usr/bin/env python
 
-from panda3d.core import *
-# Tell Panda3D to use OpenAL, not FMOD
-loadPrcFileData("", "audio-library-name p3openal_audio")
+# Tell Panda3D to use FMOD for better audio format support (must be BEFORE imports)
+from panda3d.core import loadPrcFileData
+loadPrcFileData("", "audio-library-name p3fmod_audio")
+loadPrcFileData("", "notify-level-audio debug")  # Enable audio debug logging
 
+from panda3d.core import *
 from direct.showbase.DirectObject import DirectObject
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
+
 
 # Function to put instructions on the screen.
 def addInstructions(pos, msg):
@@ -27,6 +30,9 @@ class MediaPlayer(ShowBase):
         # Initialize the ShowBase class from which we inherit, which will
         # create a window and set up everything we need for rendering into it.
         ShowBase.__init__(self)
+
+        # Initialize pause state
+        self.is_paused = False
 
         self.title = addTitle("Panda3D: Tutorial - Media Player")
         self.inst1 = addInstructions(0.06, "P: Play/Pause")
@@ -54,7 +60,7 @@ class MediaPlayer(ShowBase):
         card.reparentTo(self.render2d)
         card.setTexture(self.tex)
 
-        self.sound = loader.loadSfx(media_file)
+        self.sound = loader.loadSfx("PandaSneezes.mp3")
         # Synchronize the video to the sound.
         self.tex.synchronizeTo(self.sound)
 
@@ -68,25 +74,29 @@ class MediaPlayer(ShowBase):
     def stopsound(self):
         self.sound.stop()
         self.sound.setPlayRate(1.0)
+        self.is_paused = False  # Reset pause state
 
     def fastforward(self):
-        if self.sound.status() == AudioSound.PLAYING:
-            t = self.sound.getTime()
-            self.sound.stop()
+        if self.sound.status() == AudioSound.PLAYING and not self.is_paused:
+            # Toggle between normal and slow motion
             if self.sound.getPlayRate() == 1.0:
                 self.sound.setPlayRate(0.5)
             else:
                 self.sound.setPlayRate(1.0)
-            self.sound.setTime(t)
-            self.sound.play()
 
     def playpause(self):
-        if self.sound.status() == AudioSound.PLAYING:
-            t = self.sound.getTime()
-            self.sound.stop()
-            self.sound.setTime(t)
+        if self.is_paused:
+            # Resume from pause by restoring play rate
+            self.sound.setPlayRate(1.0)
+            self.is_paused = False
+        elif self.sound.status() == AudioSound.PLAYING:
+            # Pause by setting play rate to 0 (keeps position, no visual glitch)
+            self.sound.setPlayRate(0.0)
+            self.is_paused = True
         else:
+            # Start playing for the first time
             self.sound.play()
+            self.is_paused = False
 
 player = MediaPlayer("PandaSneezes.ogv")
 player.run()
