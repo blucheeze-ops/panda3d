@@ -21,7 +21,6 @@
 #include "dcast.h"
 
 // Panda headers.
-#include "clockObject.h"
 #include "config_audio.h"
 #include "config_putil.h"
 #include "fmodAudioManager.h"
@@ -29,22 +28,6 @@
 #include "filename.h"
 #include "virtualFileSystem.h"
 #include "reMutexHolder.h"
-
-// Panda DSP types.
-#include "chorusDSP.h"
-#include "compressorDSP.h"
-#include "distortionDSP.h"
-#include "echoDSP.h"
-#include "faderDSP.h"
-#include "flangeDSP.h"
-#include "highpassDSP.h"
-#include "limiterDSP.h"
-#include "lowpassDSP.h"
-#include "normalizeDSP.h"
-#include "oscillatorDSP.h"
-#include "paramEQDSP.h"
-#include "pitchShiftDSP.h"
-#include "sfxReverbDSP.h"
 
 // FMOD Headers.
 #include <fmod.hpp>
@@ -63,12 +46,9 @@ PN_stdfloat FMODAudioManager::_doppler_factor = 1;
 PN_stdfloat FMODAudioManager::_distance_factor = 1;
 PN_stdfloat FMODAudioManager::_drop_off_factor = 1;
 
-FMODAudioManager::DSPManagers FMODAudioManager::_dsp_managers;
-
-int FMODAudioManager::_last_update_frame = -1;
-
 #define FMOD_MIN_SAMPLE_RATE 80000
 #define FMOD_MAX_SAMPLE_RATE 192000
+#define USER_DSP_MAGIC ((void*)0x7012AB35)
 
 // Central dispatcher for audio errors.
 
@@ -248,9 +228,6 @@ FMODAudioManager::
   _sounds_playing.clear();
   _all_sounds.clear();
 
-  // Release all DSPs
-  remove_all_dsps();
-
   // Remove me from the managers list.
   _all_managers.erase(this);
 
@@ -268,122 +245,24 @@ FMODAudioManager::
 }
 
 /**
- * Configures the global DSP filter chain.
+ * Configure the global DSP filter chain.
  *
- * There is no guarantee that any given configuration will be supported by the
- * implementation.  The only way to find out what's supported is to call
- * configure_filters.  If it returns true, the configuration is supported.
+ * FMOD has a relatively powerful DSP implementation.  It is likely that most
+ * configurations will be supported.
  */
 bool FMODAudioManager::
 configure_filters(FilterProperties *config) {
-  remove_all_dsps();
-
-  const FilterProperties::ConfigVector &conf = config->get_config();
-  size_t num_filters = conf.size();
-  for (size_t i = 0; i < num_filters; i++) {
-    DSP *filter = conf[i];
-    if (!add_dsp_to_tail(filter)) {
-      remove_all_dsps();
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/**
- * Inserts the specified DSP filter into the DSP chain at the specified index.
- * Returns true if the DSP filter is supported by the audio implementation,
- * false otherwise.
- */
-bool FMODAudioManager::
-insert_dsp(int index, DSP *panda_dsp) {
   ReMutexHolder holder(_lock);
-
-  // If it's already in there, take it out and put it in the new spot.
-  remove_dsp(panda_dsp);
-
-  FMOD::DSP *dsp = create_fmod_dsp(panda_dsp);
-  if (!dsp) {
-    fmodAudio_cat.warning()
-      << panda_dsp->get_type().get_name()
-      << " unsupported by FMOD audio implementation.\n";
+  FMOD_RESULT result;
+  FMOD::DSP *head;
+  // FMOD Core API: Use getDSP(0) to get the head DSP instead of getDSPHead
+  result = _channelgroup->getDSP(0, &head);
+  if (result != 0) {
+    audio_error("Getting DSP head: " << FMOD_ErrorString(result) );
     return false;
   }
-
-  FMOD_RESULT ret;
-  ret = _channelgroup->addDSP(index, dsp);
-  fmod_audio_errcheck("_channelgroup->addDSP()", ret);
-
-  // Keep track of our DSPs.
-  add_manager_to_dsp(panda_dsp, this);
-  _dsps[panda_dsp] = dsp;
-
+  update_dsp_chain(head, config);
   return true;
-}
-
-/**
- * Removes the specified DSP filter from the DSP chain. Returns true if the
- * filter was in the DSP chain and was removed, false otherwise.
- */
-bool FMODAudioManager::
-remove_dsp(DSP *panda_dsp) {
-  ReMutexHolder holder(_lock);
-
-  auto itr = _dsps.find(panda_dsp);
-  if (itr == _dsps.end()) {
-    return false;
-  }
-
-  FMOD::DSP *dsp = itr->second;
-
-  FMOD_RESULT ret;
-  ret = _channelgroup->removeDSP(dsp);
-  fmod_audio_errcheck("_channelGroup->removeDSP()", ret);
-
-  ret = dsp->release();
-  fmod_audio_errcheck("dsp->release()", ret);
-
-  remove_manager_from_dsp(panda_dsp, this);
-  _dsps.erase(itr);
-
-  return true;
-}
-
-/**
- * Removes all DSP filters from the DSP chain.
- */
-void FMODAudioManager::
-remove_all_dsps() {
-  ReMutexHolder holder(_lock);
-
-  for (auto itr = _dsps.begin(); itr != _dsps.end(); itr++) {
-    DSP *panda_dsp = itr->first;
-    FMOD::DSP *fmod_dsp = itr->second;
-    FMOD_RESULT ret;
-
-    ret = _channelgroup->removeDSP(fmod_dsp);
-    fmod_audio_errcheck("_channelgroup->removeDSP()", ret);
-
-    ret = fmod_dsp->release();
-    fmod_audio_errcheck("fmod_dsp->release()", ret);
-
-    remove_manager_from_dsp(panda_dsp, this);
-  }
-
-  _dsps.clear();
-}
-
-/**
- * Returns the number of DSP filters present in the DSP chain.
- */
-int FMODAudioManager::
-get_num_dsps() const {
-  // Can't use _channelgroup->getNumDSPs() because that includes DSPs that are
-  // created internally by FMOD.  We want to return the number of user-created
-  // DSPs.
-
-  return (int)_dsps.size();
 }
 
 /**
@@ -593,14 +472,8 @@ update() {
   // playing.
   update_sounds();
 
-  // Update the FMOD system, but make sure we only do it once per frame.
-  ClockObject *clock = ClockObject::get_global_clock();
-  int current_frame = clock->get_frame_count();
-  if (current_frame != _last_update_frame) {
-    update_dirty_dsps();
-    _system->update();
-    _last_update_frame = current_frame;
-  }
+  // Update the FMOD system
+  _system->update();
 }
 
 /**
@@ -819,289 +692,177 @@ get_speaker_mode(FMOD_SPEAKERMODE &mode) const {
 }
 
 /**
- * Returns the FMOD DSP type from the Panda DSP type.
- */
-FMOD_DSP_TYPE FMODAudioManager::
-get_fmod_dsp_type(DSP::DSPType panda_type) {
-  switch (panda_type) {
-  case DSP::DT_chorus:
-    return FMOD_DSP_TYPE_CHORUS;
-  case DSP::DT_compressor:
-    return FMOD_DSP_TYPE_COMPRESSOR;
-  case DSP::DT_distortion:
-    return FMOD_DSP_TYPE_DISTORTION;
-  case DSP::DT_echo:
-    return FMOD_DSP_TYPE_ECHO;
-  case DSP::DT_fader:
-    return FMOD_DSP_TYPE_FADER;
-  case DSP::DT_flange:
-    return FMOD_DSP_TYPE_FLANGE;
-  case DSP::DT_highpass:
-    return FMOD_DSP_TYPE_HIGHPASS;
-  case DSP::DT_lowpass:
-    return FMOD_DSP_TYPE_LOWPASS;
-  case DSP::DT_limiter:
-    return FMOD_DSP_TYPE_LIMITER;
-  case DSP::DT_oscillator:
-    return FMOD_DSP_TYPE_OSCILLATOR;
-  case DSP::DT_parameq:
-    return FMOD_DSP_TYPE_PARAMEQ;
-  case DSP::DT_pitchshift:
-    return FMOD_DSP_TYPE_PITCHSHIFT;
-  case DSP::DT_sfxreverb:
-    return FMOD_DSP_TYPE_SFXREVERB;
-  case DSP::DT_normalize:
-    return FMOD_DSP_TYPE_NORMALIZE;
-  default:
-    return FMOD_DSP_TYPE_UNKNOWN;
-  }
-}
-
-/**
- * Creates and returns a new FMOD DSP instance for the provided Panda DSP,
- * or returns nullptr if the DSP type is unsupported.
+ * Converts a FilterConfig to an FMOD_DSP
  */
 FMOD::DSP *FMODAudioManager::
-create_fmod_dsp(DSP *panda_dsp) {
+make_dsp(const FilterProperties::FilterConfig &conf) {
   ReMutexHolder holder(_lock);
-
-  FMOD_DSP_TYPE type = get_fmod_dsp_type(panda_dsp->get_dsp_type());
-  if (type == FMOD_DSP_TYPE_UNKNOWN) {
-    // We don't support this DSP type.
+  FMOD_DSP_TYPE dsptype;
+  FMOD_RESULT result;
+  FMOD::DSP *dsp;
+  switch (conf._type) {
+  case FilterProperties::FT_lowpass:    dsptype = FMOD_DSP_TYPE_LOWPASS;     break;
+  case FilterProperties::FT_highpass:   dsptype = FMOD_DSP_TYPE_HIGHPASS;    break;
+  case FilterProperties::FT_echo:       dsptype = FMOD_DSP_TYPE_ECHO;        break;
+  case FilterProperties::FT_flange:     dsptype = FMOD_DSP_TYPE_FLANGE;      break;
+  case FilterProperties::FT_distort:    dsptype = FMOD_DSP_TYPE_DISTORTION;  break;
+  case FilterProperties::FT_normalize:  dsptype = FMOD_DSP_TYPE_NORMALIZE;   break;
+  case FilterProperties::FT_parameq:    dsptype = FMOD_DSP_TYPE_PARAMEQ;     break;
+  case FilterProperties::FT_pitchshift: dsptype = FMOD_DSP_TYPE_PITCHSHIFT;  break;
+  case FilterProperties::FT_chorus:     dsptype = FMOD_DSP_TYPE_CHORUS;      break;
+  case FilterProperties::FT_sfxreverb:  dsptype = FMOD_DSP_TYPE_SFXREVERB;   break;
+  case FilterProperties::FT_compress:   dsptype = FMOD_DSP_TYPE_COMPRESSOR;  break;
+  default:
+    audio_error("Garbage in DSP configuration data");
     return nullptr;
   }
 
-  audio_debug("Creating new DSP instance of type "
-              << panda_dsp->get_type().get_name());
+  result = _system->createDSPByType( dsptype, &dsp);
+  if (result != 0) {
+    audio_error("Could not create DSP object");
+    return nullptr;
+  }
 
-  FMOD_RESULT result;
-  FMOD::DSP *dsp;
-  result = _system->createDSPByType(type, &dsp);
-  fmod_audio_errcheck("_sytem->createDSPByType()", result);
+  FMOD_RESULT res1 = FMOD_OK;
+  FMOD_RESULT res2 = FMOD_OK;
+  FMOD_RESULT res3 = FMOD_OK;
+  FMOD_RESULT res4 = FMOD_OK;
+  FMOD_RESULT res5 = FMOD_OK;
+  FMOD_RESULT res6 = FMOD_OK;
+  FMOD_RESULT res7 = FMOD_OK;
+  FMOD_RESULT res8 = FMOD_OK;
+  FMOD_RESULT res9 = FMOD_OK;
+  FMOD_RESULT res10 = FMOD_OK;
+  FMOD_RESULT res11 = FMOD_OK;
+  FMOD_RESULT res12 = FMOD_OK;
+  FMOD_RESULT res13 = FMOD_OK;
+  FMOD_RESULT res14 = FMOD_OK;
 
-  // Apply the current parameters while we're at it.
-  configure_dsp(panda_dsp, dsp);
-  panda_dsp->clear_dirty();
+  switch (conf._type) {
+  case FilterProperties::FT_lowpass:
+    res1 = dsp->setParameterFloat(FMOD_DSP_LOWPASS_CUTOFF,     conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_LOWPASS_RESONANCE,  conf._b);
+    break;
+  case FilterProperties::FT_highpass:
+    res1 = dsp->setParameterFloat(FMOD_DSP_HIGHPASS_CUTOFF,    conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_HIGHPASS_RESONANCE, conf._b);
+    break;
+  case FilterProperties::FT_echo:
+    res1 = dsp->setParameterFloat(FMOD_DSP_ECHO_DELAY,         conf._c);
+    res2 = dsp->setParameterFloat(FMOD_DSP_ECHO_FEEDBACK,      conf._d);
+    res3 = dsp->setParameterFloat(FMOD_DSP_ECHO_DRYLEVEL,      conf._a);
+    res4 = dsp->setParameterFloat(FMOD_DSP_ECHO_WETLEVEL,      conf._b);
+    break;
+  case FilterProperties::FT_flange:
+    res1 = dsp->setParameterFloat(FMOD_DSP_FLANGE_MIX,         conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_FLANGE_DEPTH,       conf._c);
+    res3 = dsp->setParameterFloat(FMOD_DSP_FLANGE_RATE,        conf._d);
+    break;
+  case FilterProperties::FT_distort:
+    res1 = dsp->setParameterFloat(FMOD_DSP_DISTORTION_LEVEL,   conf._a);
+    break;
+  case FilterProperties::FT_normalize:
+    res1 = dsp->setParameterFloat(FMOD_DSP_NORMALIZE_FADETIME,  conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_NORMALIZE_THRESHOLD,conf._b);
+    res3 = dsp->setParameterFloat(FMOD_DSP_NORMALIZE_MAXAMP,    conf._c);
+    break;
+  case FilterProperties::FT_parameq:
+    res1 = dsp->setParameterFloat(FMOD_DSP_PARAMEQ_CENTER,     conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_PARAMEQ_BANDWIDTH,  conf._b);
+    res3 = dsp->setParameterFloat(FMOD_DSP_PARAMEQ_GAIN,       conf._c);
+    break;
+  case FilterProperties::FT_pitchshift:
+    res1 = dsp->setParameterFloat(FMOD_DSP_PITCHSHIFT_PITCH,   conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_PITCHSHIFT_FFTSIZE, conf._b);
+    break;
+  case FilterProperties::FT_chorus:
+    res1 = dsp->setParameterFloat(FMOD_DSP_CHORUS_MIX,         conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_CHORUS_RATE,        conf._f);
+    res3 = dsp->setParameterFloat(FMOD_DSP_CHORUS_DEPTH,       conf._g);
+    break;
+  case FilterProperties::FT_sfxreverb:
+    res1 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DECAYTIME, conf._d);
+    res2 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_EARLYDELAY, conf._g);
+    res3 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_LATEDELAY, conf._i);
+    res4 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_HFREFERENCE, conf._l);
+    res5 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_HFDECAYRATIO, conf._e);
+    res6 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DIFFUSION, conf._j);
+    res7 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DENSITY, conf._k);
+    res8 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_LOWSHELFFREQUENCY, conf._n);
+    res9 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_LOWSHELFGAIN, conf._m);
+    res10 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_HIGHCUT, conf._c);
+    res11 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_EARLYLATEMIX, conf._f);
+    res12 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_WETLEVEL, conf._b);
+    res13 = dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DRYLEVEL, conf._a);
+    break;
+  case FilterProperties::FT_compress:
+    res1 = dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_THRESHOLD, conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_ATTACK,    conf._b);
+    res3 = dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_RELEASE,   conf._c);
+    res4 = dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_GAINMAKEUP,conf._d);
+    break;
+  }
+
+  if ((res1!=FMOD_OK)||(res2!=FMOD_OK)||(res3!=FMOD_OK)||(res4!=FMOD_OK)||
+      (res5!=FMOD_OK)||(res6!=FMOD_OK)||(res7!=FMOD_OK)||(res8!=FMOD_OK)||
+      (res9!=FMOD_OK)||(res10!=FMOD_OK)||(res11!=FMOD_OK)||(res12!=FMOD_OK)||
+      (res13!=FMOD_OK)||(res14!=FMOD_OK)) {
+    audio_error("Could not configure DSP");
+    dsp->release();
+    return nullptr;
+  }
+
+  dsp->setUserData(USER_DSP_MAGIC);
 
   return dsp;
 }
 
 /**
- * Returns the FMOD DSP associated with the Panda DSP, or nullptr if it doesn't
- * exist.
- */
-FMOD::DSP *FMODAudioManager::
-get_fmod_dsp(DSP *panda_dsp) const {
-  auto itr = _dsps.find(panda_dsp);
-  if (itr == _dsps.end()) {
-    return nullptr;
-  }
-
-  return itr->second;
-}
-
-/**
- * Configures the FMOD DSP based on the parameters in the Panda DSP.
+ * Alters a DSP chain to make it match the specified configuration.
+ *
+ * This is an inadequate implementation - it just clears the whole DSP chain
+ * and rebuilds it from scratch.  A better implementation would compare the
+ * existing DSP chain to the desired one, and make incremental changes.  This
+ * would prevent a "pop" sound when the changes are made.
  */
 void FMODAudioManager::
-configure_dsp(DSP *dsp_conf, FMOD::DSP *dsp) {
+update_dsp_chain(FMOD::DSP *head, FilterProperties *config) {
   ReMutexHolder holder(_lock);
+  const FilterProperties::ConfigVector &conf = config->get_config();
+  FMOD_RESULT result;
 
-  switch(dsp_conf->get_dsp_type()) {
-  default:
-    fmodAudio_cat.warning()
-      << "Don't know how to configure "
-      << dsp_conf->get_type().get_name() << "\n";
-    break;
-  case DSP::DT_chorus:
-    {
-      ChorusDSP *chorus_conf = DCAST(ChorusDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_CHORUS_MIX, chorus_conf->get_mix());
-      dsp->setParameterFloat(FMOD_DSP_CHORUS_RATE, chorus_conf->get_rate());
-      dsp->setParameterFloat(FMOD_DSP_CHORUS_DEPTH, chorus_conf->get_depth());
+  while (1) {
+    int numinputs;
+    result = head->getNumInputs(&numinputs);
+    fmod_audio_errcheck("head->getNumInputs()", result);
+    if (numinputs != 1) {
+      break;
     }
-    break;
-  case DSP::DT_compressor:
-    {
-      CompressorDSP *comp_conf = DCAST(CompressorDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_THRESHOLD, comp_conf->get_threshold());
-      dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_RATIO, comp_conf->get_ratio());
-      dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_ATTACK, comp_conf->get_attack());
-      dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_RELEASE, comp_conf->get_release());
-      dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_GAINMAKEUP, comp_conf->get_gainmakeup());
+    FMOD::DSP *prev;
+    result = head->getInput(0, &prev, nullptr);
+    fmod_audio_errcheck("head->getInput()", result);
+    void *userdata;
+    result = prev->getUserData(&userdata);
+    fmod_audio_errcheck("prev->getUserData()", result);
+    if (userdata != USER_DSP_MAGIC) {
+      break;
     }
-    break;
-  case DSP::DT_distortion:
-    {
-      DistortionDSP *dist_conf = DCAST(DistortionDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_DISTORTION_LEVEL, dist_conf->get_level());
-    }
-    break;
-  case DSP::DT_echo:
-    {
-      EchoDSP *echo_conf = DCAST(EchoDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_ECHO_DELAY, echo_conf->get_delay());
-      dsp->setParameterFloat(FMOD_DSP_ECHO_FEEDBACK, echo_conf->get_feedback());
-      dsp->setParameterFloat(FMOD_DSP_ECHO_DRYLEVEL, echo_conf->get_drylevel());
-      dsp->setParameterFloat(FMOD_DSP_ECHO_WETLEVEL, echo_conf->get_wetlevel());
-    }
-    break;
-  case DSP::DT_fader:
-    {
-      FaderDSP *fader_conf = DCAST(FaderDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_FADER_GAIN, fader_conf->get_gain());
-    }
-    break;
-  case DSP::DT_flange:
-    {
-      FlangeDSP *flange_conf = DCAST(FlangeDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_FLANGE_MIX, flange_conf->get_mix());
-      dsp->setParameterFloat(FMOD_DSP_FLANGE_DEPTH, flange_conf->get_depth());
-      dsp->setParameterFloat(FMOD_DSP_FLANGE_RATE, flange_conf->get_rate());
-    }
-    break;
-  case DSP::DT_highpass:
-    {
-      HighpassDSP *hp_conf = DCAST(HighpassDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_HIGHPASS_CUTOFF, hp_conf->get_cutoff());
-      dsp->setParameterFloat(FMOD_DSP_HIGHPASS_RESONANCE, hp_conf->get_resonance());
-    }
-    break;
-  case DSP::DT_limiter:
-    {
-      LimiterDSP *lim_conf = DCAST(LimiterDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_LIMITER_RELEASETIME, lim_conf->get_release_time());
-      dsp->setParameterFloat(FMOD_DSP_LIMITER_CEILING, lim_conf->get_ceiling());
-      dsp->setParameterFloat(FMOD_DSP_LIMITER_MAXIMIZERGAIN, lim_conf->get_maximizer_gain());
-    }
-    break;
-  case DSP::DT_lowpass:
-    {
-      LowpassDSP *lp_conf = DCAST(LowpassDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_LOWPASS_CUTOFF, lp_conf->get_cutoff());
-      dsp->setParameterFloat(FMOD_DSP_LOWPASS_RESONANCE, lp_conf->get_resonance());
-    }
-    break;
-  case DSP::DT_normalize:
-    {
-      NormalizeDSP *norm_conf = DCAST(NormalizeDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_NORMALIZE_FADETIME, norm_conf->get_fade_time());
-      dsp->setParameterFloat(FMOD_DSP_NORMALIZE_THRESHHOLD, norm_conf->get_threshold());
-      dsp->setParameterFloat(FMOD_DSP_NORMALIZE_MAXAMP, norm_conf->get_max_amp());
-    }
-    break;
-  case DSP::DT_oscillator:
-    {
-      OscillatorDSP *osc_conf = DCAST(OscillatorDSP, dsp_conf);
-      dsp->setParameterInt(FMOD_DSP_OSCILLATOR_TYPE, osc_conf->get_oscillator_type());
-      dsp->setParameterFloat(FMOD_DSP_OSCILLATOR_RATE, osc_conf->get_rate());
-    }
-    break;
-  case DSP::DT_parameq:
-    {
-      ParamEQDSP *peq_conf = DCAST(ParamEQDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_PARAMEQ_CENTER, peq_conf->get_center());
-      dsp->setParameterFloat(FMOD_DSP_PARAMEQ_BANDWIDTH, peq_conf->get_bandwith());
-      dsp->setParameterFloat(FMOD_DSP_PARAMEQ_GAIN, peq_conf->get_gain());
-    }
-    break;
-  case DSP::DT_pitchshift:
-    {
-      PitchShiftDSP *ps_conf = DCAST(PitchShiftDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_PITCHSHIFT_PITCH, ps_conf->get_pitch());
-      dsp->setParameterFloat(FMOD_DSP_PITCHSHIFT_FFTSIZE, (float)ps_conf->get_fft_size());
-    }
-    break;
-  case DSP::DT_sfxreverb:
-    {
-      SFXReverbDSP *sfx_conf = DCAST(SFXReverbDSP, dsp_conf);
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DECAYTIME, sfx_conf->get_decay_time());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_EARLYDELAY, sfx_conf->get_early_delay());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_LATEDELAY, sfx_conf->get_late_delay());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_HFREFERENCE, sfx_conf->get_hf_reference());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_HFDECAYRATIO, sfx_conf->get_hf_decay_ratio());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DIFFUSION, sfx_conf->get_diffusion());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DENSITY, sfx_conf->get_density());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_LOWSHELFFREQUENCY, sfx_conf->get_low_shelf_frequency());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_LOWSHELFGAIN, sfx_conf->get_low_shelf_gain());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_HIGHCUT, sfx_conf->get_highcut());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_EARLYLATEMIX, sfx_conf->get_early_late_mix());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_WETLEVEL, sfx_conf->get_wetlevel());
-      dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DRYLEVEL, sfx_conf->get_drylevel());
-    }
-    break;
+    // FMOD Core API: Use ChannelControl::removeDSP instead of DSP::remove
+    result = _channelgroup->removeDSP(prev);
+    fmod_audio_errcheck("_channelgroup->removeDSP()", result);
+    result = prev->release();
+    fmod_audio_errcheck("prev->release()", result);
+  }
+
+  for (int i=0; i<(int)(conf.size()); i++) {
+    FMOD::DSP *dsp = make_dsp(conf[i]);
+    result = _channelgroup->addDSP(i, dsp);
+    fmod_audio_errcheck("_channelgroup->addDSP()", result);
   }
 }
 
 /**
- * Adds the specified audio manager as having the specified DSP applied to it.
- */
-void FMODAudioManager::
-add_manager_to_dsp(DSP *dsp, FMODAudioManager *mgr) {
-  auto itr = _dsp_managers.find(dsp);
-  if (itr == _dsp_managers.end()) {
-    audio_debug("Adding first manager to DSP");
-    _dsp_managers[dsp] = { mgr };
-    return;
-  }
-
-  audio_debug("Adding new manager to DSP");
-
-  itr->second.insert(mgr);
-}
-
-/**
- * Removes the specified audio manager from the list of audio managers with
- * this DSP applied to it.  Destructs the DSP if there are no more managers
- * with this DSP.
- */
-void FMODAudioManager::
-remove_manager_from_dsp(DSP *dsp, FMODAudioManager *mgr) {
-  auto itr = _dsp_managers.find(dsp);
-  if (itr == _dsp_managers.end()) {
-    return;
-  }
-
-  itr->second.erase(mgr);
-
-  audio_debug("Removed manager from DSP");
-
-  if (itr->second.size() == 0) {
-    audio_debug("DSP has no more managers");
-    _dsp_managers.erase(itr);
-  }
-}
-
-/**
- * Updates all DSPs with the dirty flag set.
- */
-void FMODAudioManager::
-update_dirty_dsps() {
-  for (auto itr = _dsp_managers.begin(); itr != _dsp_managers.end(); itr++) {
-    DSP *panda_dsp = itr->first;
-    const ManagerList &managers = itr->second;
-
-    if (panda_dsp->is_dirty()) {
-      audio_debug("Updating dirty " << panda_dsp->get_type().get_name());
-
-      for (auto mitr = managers.begin(); mitr != managers.end(); mitr++) {
-        FMODAudioManager *manager = *mitr;
-        FMOD::DSP *fmod_dsp = manager->get_fmod_dsp(panda_dsp);
-        if (!fmod_dsp) {
-          continue;
-        }
-
-        manager->configure_dsp(panda_dsp, fmod_dsp);
-      }
-
-      panda_dsp->clear_dirty();
-    }
-  }
-}
-
-/**
- * Inform the manager that a sound is about to play.  The manager will add
- * this sound to the table of sounds that are playing.
+ * Inform the manager that a sound is about to play.
  */
 void FMODAudioManager::
 starting_sound(FMODAudioSound *sound) {

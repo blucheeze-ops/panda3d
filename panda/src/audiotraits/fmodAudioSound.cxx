@@ -345,10 +345,10 @@ get_loop_count() const {
  * Sets the time at which subsequent loops will begin.
  * A value of 0 indicates the beginning of the audio.
  */
-void FmodAudioSound::
+void FMODAudioSound::
 set_loop_start(PN_stdfloat loop_start) {
-  ReMutexHolder holder(FmodAudioManager::_lock);
-  audio_debug("FmodAudioSound::set_loop_start()   Setting the sound's loop start to: " << loop_start);
+  ReMutexHolder holder(FMODAudioManager::_lock);
+  audio_debug("FMODAudioSound::set_loop_start()   Setting the sound's loop start to: " << loop_start);
 
   FMOD_RESULT result;
   unsigned int length;
@@ -359,22 +359,22 @@ set_loop_start(PN_stdfloat loop_start) {
   unsigned int loop_start_int = (unsigned int) (loop_start * 1000.0);
 
   if (loop_start_int >= length) {
-    audio_debug("FmodAudioSound::set_loop_start()   Would loop after end of track, setting start to 0");
+    audio_debug("FMODAudioSound::set_loop_start()   Would loop after end of track, setting start to 0");
     loop_start_int = 0;
   }
 
   result = _sound->setLoopPoints(loop_start_int, FMOD_TIMEUNIT_MS, length, FMOD_TIMEUNIT_MS);
   fmod_audio_errcheck("_sound->setLoopPoints()", result);
-  audio_debug("FmodAudioSound::set_loop_start()   Sound's loop start should be set to: " << loop_start);
+  audio_debug("FMODAudioSound::set_loop_start()   Sound's loop start should be set to: " << loop_start);
 }
 
 /**
  * Return the time at which subsequent loops will begin.
  * A value of 0 indicates the beginning of the audio.
  */
-PN_stdfloat FmodAudioSound::
+PN_stdfloat FMODAudioSound::
 get_loop_start() const {
-  ReMutexHolder holder(FmodAudioManager::_lock);
+  ReMutexHolder holder(FMODAudioManager::_lock);
   FMOD_RESULT result;
   unsigned int loop_start;
 
