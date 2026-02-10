@@ -189,19 +189,15 @@ private:
 
   std::string _finished_event;
 
-  static FMOD_RESULT F_CALLBACK
-  open_callback(const char *name, unsigned int *file_size,
-                void **handle, void *user_data);
+  static FMOD_RESULT F_CALLBACK open_callback(const char *name, unsigned int *file_size,
+                                               void **handle, void *user_data);
 
-  static FMOD_RESULT F_CALLBACK
-  close_callback(void *handle, void *user_data);
+  static FMOD_RESULT F_CALLBACK close_callback(void *handle, void *user_data);
 
-  static FMOD_RESULT F_CALLBACK
-  read_callback(void *handle, void *buffer, unsigned int size_bytes,
-                unsigned int *bytes_read, void *user_data);
+  static FMOD_RESULT F_CALLBACK read_callback(void *handle, void *buffer, unsigned int size_bytes,
+                                               unsigned int *bytes_read, void *user_data);
 
-  static FMOD_RESULT F_CALLBACK
-  seek_callback(void *handle, unsigned int pos, void *user_data);
+  static FMOD_RESULT F_CALLBACK seek_callback(void *handle, unsigned int pos, void *user_data);
 
  public:
   static TypeHandle get_class_type() {

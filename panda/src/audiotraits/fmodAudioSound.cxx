@@ -934,9 +934,8 @@ get_finished_event() const {
 /**
  * A hook into Panda's virtual file system.
  */
-FMOD_RESULT F_CALLBACK FMODAudioSound::
-open_callback(const char *name, unsigned int *file_size,
-              void **handle, void *user_data) {
+FMOD_RESULT F_CALLBACK FMODAudioSound::open_callback(const char *name, unsigned int *file_size,
+                                                      void **handle, void *user_data) {
   // We actually pass in the VirtualFile pointer as the "name".
   VirtualFile *file = (VirtualFile *)name;
   if (file == nullptr) {
@@ -962,8 +961,7 @@ open_callback(const char *name, unsigned int *file_size,
 /**
  * A hook into Panda's virtual file system.
  */
-FMOD_RESULT F_CALLBACK FMODAudioSound::
-close_callback(void *handle, void *user_data) {
+FMOD_RESULT F_CALLBACK FMODAudioSound::close_callback(void *handle, void *user_data) {
   VirtualFile *file = (VirtualFile *)user_data;
   if (fmodAudio_cat.is_spam()) {
     fmodAudio_cat.spam()
@@ -984,9 +982,8 @@ close_callback(void *handle, void *user_data) {
 /**
  * A hook into Panda's virtual file system.
  */
-FMOD_RESULT F_CALLBACK FMODAudioSound::
-read_callback(void *handle, void *buffer, unsigned int size_bytes,
-              unsigned int *bytes_read, void *user_data) {
+FMOD_RESULT F_CALLBACK FMODAudioSound::read_callback(void *handle, void *buffer, unsigned int size_bytes,
+                                                      unsigned int *bytes_read, void *user_data) {
   VirtualFile *file = (VirtualFile *)user_data;
   if (fmodAudio_cat.is_spam()) {
     fmodAudio_cat.spam()
@@ -1019,8 +1016,7 @@ read_callback(void *handle, void *buffer, unsigned int size_bytes,
 /**
  * A hook into Panda's virtual file system.
  */
-FMOD_RESULT F_CALLBACK FMODAudioSound::
-seek_callback(void *handle, unsigned int pos, void *user_data) {
+FMOD_RESULT F_CALLBACK FMODAudioSound::seek_callback(void *handle, unsigned int pos, void *user_data) {
   VirtualFile *file = (VirtualFile *)user_data;
   if (fmodAudio_cat.is_spam()) {
     fmodAudio_cat.spam()
