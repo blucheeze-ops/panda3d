@@ -16,6 +16,12 @@ Build: python3 makepanda/makepanda.py --everything --no-python --threads 8 2>&1 
 pip install panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl
 pip install --force-reinstall panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl
 
+Windows:
+
+python .\makepanda\makepanda.py --everything --installer --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=16
+
+python .\makepanda\makepanda.py --everything --wheel --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=16
+
 ## FMOD Audio System Changes
 
 ### DSP System Reversion (FMOD Core API)

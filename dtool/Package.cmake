@@ -659,9 +659,7 @@ package_status(OPUS "Opus")
 #
 
 # FMOD Core
-if(NOT APPLE)
-  find_package(FMOD QUIET)
-endif()
+find_package(FMOD QUIET)
 
 package_option(FMOD
   "This enables support for the FMOD sound library,
