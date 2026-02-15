@@ -1,26 +1,79 @@
 ## Build Instructions
 
-Run build on my Macbook Air:
+### Prerequisites
 
-Create an installable for MacOS (dmg). Will install the panda3d SDK system wide (C++ headers, python bindings).
-    python makepanda/makepanda.py --everything --installer \
-    --python-incdir /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include \
-    --python-libdir /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib --threads 8
+#### Install FMOD Core API
 
-Create a python wheel so that it can be directly installed in a python env for a python game project.
-    python makepanda/makepanda.py --everything --wheel \
-    --python-incdir /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include \
-    --python-libdir /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib --threads 8
+FMOD is required for audio support. Install it to the thirdparty directory using the installation script:
 
-Build: python3 makepanda/makepanda.py --everything --no-python --threads 8 2>&1 | tail -n 20
+**macOS:**
+```bash
+# Download FMOD Core API SDK and extract to project root
+# Then run the installer script:
+python install_fmod.py --sdk-path "path/to/FMOD Programmers API"
+```
+
+**Windows:**
+```bash
+# Download FMOD Core API SDK and extract to project root
+# Then run the installer script:
+python install_fmod.py --sdk-path "path\to\FMOD Studio API Windows"
+```
+
+This will copy the FMOD headers and libraries to the appropriate thirdparty directory for your platform.
+
+### Building Panda3D
+
+#### macOS
+
+**Build Python Wheel:**
+```bash
+python makepanda/makepanda.py --everything --wheel --threads 8
+```
+
+**Build macOS Installer (DMG) (Optional):**
+```bash
+python makepanda/makepanda.py --everything --installer --threads 8
+```
+
+The installer will install the Panda3D SDK system-wide with C++ headers and Python bindings.
+
+**Install Wheel:**
+```bash
 pip install panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl
+# Or force reinstall:
 pip install --force-reinstall panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl
+```
 
-Windows:
+**Build without Python bindings (C++ only):**
+```bash
+python makepanda/makepanda.py --everything --no-python --threads 8
+```
 
-python .\makepanda\makepanda.py --everything --installer --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=16
+#### Windows
 
+**Build Python Wheel:**
+```bash
 python .\makepanda\makepanda.py --everything --wheel --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=16
+```
+
+**Build Windows Installer (Optional):**
+```bash
+python .\makepanda\makepanda.py --everything --installer --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=16
+```
+
+**Install Wheel:**
+```bash
+pip install panda3d-1.11.0-cp314-cp314-win_amd64.whl
+# Or force reinstall:
+pip install --force-reinstall panda3d-1.11.0-cp314-cp314-win_amd64.whl
+```
+
+### Notes
+
+- **Python Detection**: makepanda now automatically detects Homebrew Python on macOS (both ARM and Intel). No need to specify `--python-incdir` or `--python-libdir`.
+- **Threading**: Adjust `--threads` based on your CPU cores for faster builds.
+- **FMOD**: The build will automatically include FMOD support if libraries are found in the thirdparty directory.
 
 ## FMOD Audio System Changes
 

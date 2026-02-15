@@ -13,12 +13,6 @@ import argparse
 from pathlib import Path
 
 
-# Platform-specific SDK folder names
-SDK_FOLDER_NAMES = {
-    'windows': 'FMOD Studio API Windows',
-    'darwin': 'FMOD Studio API macOS',
-}
-
 # Platform-specific thirdparty target directories
 TARGET_DIRS = {
     'windows': {
@@ -32,17 +26,11 @@ TARGET_DIRS = {
     }
 }
 
-# Platform-specific library architecture paths
-LIB_ARCH_PATHS = {
-    'windows': {
-        'x64': 'x64',
-        'x86': 'x86',
-        'arm64': 'arm64',
-    },
-    'darwin': {
-        'arm64': 'arm64',
-        'x86_64': 'x86_64',
-    }
+# Windows-specific library architecture paths (macOS uses universal binaries)
+WINDOWS_LIB_ARCH_PATHS = {
+    'x64': 'x64',
+    'x86': 'x86',
+    'arm64': 'arm64',
 }
 
 
@@ -69,27 +57,22 @@ def detect_architecture():
     return machine
 
 
-def get_fmod_paths(sdk_base_path, platform_type, arch):
+def get_fmod_paths(sdk_path, platform_type, arch):
     """
-    Construct FMOD SDK source paths based on platform.
+    Construct FMOD SDK source paths.
 
     Args:
-        sdk_base_path: Parent directory containing SDK
+        sdk_path: Path to FMOD SDK root (contains api/core/)
         platform_type: 'windows' or 'darwin'
-        arch: 'x64', 'arm64', etc.
+        arch: 'x64', 'arm64', etc. (ignored for macOS universal binaries)
 
     Returns:
         tuple: (fmod_source_path, target_base_path)
     """
-    sdk_base = Path(sdk_base_path).resolve()
+    sdk_root = Path(sdk_path).resolve()
 
-    # Get platform-specific SDK folder name
-    sdk_folder_name = SDK_FOLDER_NAMES.get(platform_type)
-    if not sdk_folder_name:
-        raise ValueError(f"Unsupported platform: {platform_type}")
-
-    # Construct source path
-    fmod_source = sdk_base / sdk_folder_name / "api" / "core"
+    # Construct source path - sdk_path should contain api/core/
+    fmod_source = sdk_root / "api" / "core"
 
     # Construct target path
     target_dir_name = TARGET_DIRS[platform_type].get(arch)
@@ -109,7 +92,7 @@ def validate_source(fmod_source, platform_type, arch):
     # Check main source directory
     if not fmod_source.exists():
         errors.append(f"FMOD source directory not found: {fmod_source}")
-        errors.append(f"  Expected: <sdk_path>/{SDK_FOLDER_NAMES[platform_type]}/api/core/")
+        errors.append(f"  Expected: <sdk_path>/api/core/")
         return errors
 
     # Check inc directory
@@ -121,7 +104,7 @@ def validate_source(fmod_source, platform_type, arch):
 
     # Check lib directory (platform-specific)
     if platform_type == 'windows':
-        lib_arch = LIB_ARCH_PATHS['windows'][arch]
+        lib_arch = WINDOWS_LIB_ARCH_PATHS[arch]
         lib_arch_dir = fmod_source / "lib" / lib_arch
 
         if not lib_arch_dir.exists():
@@ -133,14 +116,16 @@ def validate_source(fmod_source, platform_type, arch):
                 errors.append(f"No .dll files found in: {lib_arch_dir}")
 
     elif platform_type == 'darwin':
-        lib_arch = LIB_ARCH_PATHS['darwin'].get(arch, arch)
-        lib_arch_dir = fmod_source / "lib" / lib_arch
+        # macOS uses universal binaries in lib/ directly (no arch subdirectories)
+        lib_dir = fmod_source / "lib"
 
-        if not lib_arch_dir.exists():
-            errors.append(f"Libraries directory not found: {lib_arch_dir}")
+        if not lib_dir.exists():
+            errors.append(f"Libraries directory not found: {lib_dir}")
         else:
-            if not any(lib_arch_dir.glob('*.dylib')) and not any(lib_arch_dir.glob('*.a')):
-                errors.append(f"No .dylib or .a files found in: {lib_arch_dir}")
+            # Check for at least one .dylib file
+            dylibs = list(lib_dir.glob('*.dylib'))
+            if not dylibs:
+                errors.append(f"No .dylib files found in: {lib_dir}")
 
     return errors
 
@@ -185,7 +170,7 @@ def copy_files_windows(fmod_source, target_base, arch):
                 stats['errors'].append(f"Error copying {src_file.name}: {e}")
 
     # Copy library files (.lib)
-    lib_arch = LIB_ARCH_PATHS['windows'][arch]
+    lib_arch = WINDOWS_LIB_ARCH_PATHS[arch]
     lib_source = fmod_source / "lib" / lib_arch
     lib_target = target_base / "lib"
 
@@ -211,21 +196,35 @@ def copy_files_windows(fmod_source, target_base, arch):
     return stats
 
 
-def copy_files_darwin(fmod_source, target_base, arch):
-    """Copy files for macOS platform (placeholder)."""
-    print("\nmacOS Installation (placeholder - to be implemented)")
-    print("=" * 60)
-    print(f"Source: {fmod_source}")
-    print(f"Target: {target_base}")
-    print(f"Architecture: {arch}")
-    print("\nTODO:")
-    print("  - Copy header files from inc/ to include/")
-    print("  - Copy .dylib files from lib/{arch}/ to lib/")
-    print("=" * 60)
-
-    # Placeholder - to be implemented
+def copy_files_darwin(fmod_source, target_base):
+    """Copy files for macOS platform."""
     stats = {'headers': 0, 'libraries': 0, 'binaries': 0, 'errors': []}
-    stats['errors'].append("macOS installation not yet implemented")
+
+    # Copy header files
+    inc_source = fmod_source / "inc"
+    inc_target = target_base / "include"
+
+    for pattern in ['*.h', '*.hpp', '*.cs']:
+        for src_file in inc_source.glob(pattern):
+            try:
+                dst_file = inc_target / src_file.name
+                shutil.copy2(src_file, dst_file)
+                stats['headers'] += 1
+            except Exception as e:
+                stats['errors'].append(f"Error copying {src_file.name}: {e}")
+
+    # Copy universal dylib files (from lib/ directly, no arch subdirectory)
+    lib_source = fmod_source / "lib"
+    lib_target = target_base / "lib"
+
+    for src_file in lib_source.glob('*.dylib'):
+        try:
+            dst_file = lib_target / src_file.name
+            shutil.copy2(src_file, dst_file)
+            stats['libraries'] += 1
+        except Exception as e:
+            stats['errors'].append(f"Error copying {src_file.name}: {e}")
+
     return stats
 
 
@@ -234,7 +233,8 @@ def copy_files(platform_type, fmod_source, target_base, arch):
     if platform_type == 'windows':
         return copy_files_windows(fmod_source, target_base, arch)
     elif platform_type == 'darwin':
-        return copy_files_darwin(fmod_source, target_base, arch)
+        # macOS uses universal binaries, arch parameter not needed
+        return copy_files_darwin(fmod_source, target_base)
     else:
         raise ValueError(f"Unsupported platform: {platform_type}")
 
@@ -264,23 +264,23 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run from FMOD SDK directory (uses current directory)
-  cd thirdparty/fmod
-  python ../../install_fmod.py
+  # Point to FMOD SDK root directory (contains api/core/)
+  python install_fmod.py --sdk-path "FMOD Programmers API"
 
-  # Or specify SDK path explicitly
-  python install_fmod.py --sdk-path thirdparty/fmod
+  # Windows with custom SDK location
+  python install_fmod.py --sdk-path "C:/SDKs/FMOD Studio API Windows"
 
-  # Custom SDK location
-  python install_fmod.py --sdk-path /path/to/fmod_sdk
+  # macOS from project root
+  cd ~/panda3d
+  python install_fmod.py --sdk-path "FMOD Programmers API"
         """
     )
 
     parser.add_argument(
         '--sdk-path',
         type=str,
-        default='.',
-        help='Path to directory containing FMOD SDK (default: current directory)'
+        required=True,
+        help='Path to FMOD SDK root directory (must contain api/core/)'
     )
 
     parser.add_argument(
