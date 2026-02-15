@@ -5,7 +5,7 @@ from panda3d.core import loadPrcFileData
 loadPrcFileData("", "audio-library-name p3fmod_audio")
 loadPrcFileData("", "notify-level-audio debug")  # Enable audio debug logging
 
-from panda3d.core import *
+from panda3d.core import MovieTexture, CardMaker, NodePath, TextNode, AudioSound, FilterProperties
 from direct.showbase.DirectObject import DirectObject
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase

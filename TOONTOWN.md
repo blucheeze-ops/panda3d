@@ -2,88 +2,131 @@
 
 ## Prerequisites
 
-### Install FMOD Core API
+### FMOD Core API Installation
 
-FMOD is required for audio support. Install it to the thirdparty directory using the installation script:
+FMOD is required for audio support. Download the FMOD Core API SDK, extract to project root, then run:
 
-**macOS:**
 ```bash
-# Download FMOD Core API SDK and extract to project root
-# Ex: panda3d/FMOD Programmers API
-# Then run the installer script:
+# macOS - Ex: panda3d/FMOD Programmers API
 python install_fmod.py --sdk-path "path/to/FMOD Programmers API"
-```
 
-**Windows:**
-```bash
-# Download FMOD Core API SDK and extract to project root
-# Ex: panda3d/FMOD Studio API Windows
-# Then run the installer script:
+# Windows - Ex: panda3d/FMOD Studio API Windows
 python install_fmod.py --sdk-path "path\to\FMOD Studio API Windows"
 ```
 
-This will copy the FMOD headers and libraries to the appropriate thirdparty directory for your platform.
+This copies FMOD headers and libraries to the appropriate thirdparty directory.
 
-## Building Panda3D
+## Quick Start
 
-### macOS
+### Build and Install
 
-Build Python Wheel:
+| Platform | Build Command | Wheel Filename |
+|----------|--------------|----------------|
+| **macOS** | `python makepanda/makepanda.py --everything --wheel --threads 8` | `panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl` |
+| **Windows** | `python makepanda\makepanda.py --everything --wheel --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads 8` | `panda3d-1.11.0-cp314-cp314-win_amd64.whl` |
+
+**Install wheel (with IDE type stubs):**
 ```bash
-python makepanda/makepanda.py --everything --wheel --threads 8
+python install_panda3d_pylib.py <wheel-filename>
 ```
 
-Build macOS Installer (DMG) (Optional):
+The install script automatically:
+- Installs/reinstalls the wheel in the active virtual environment
+- Generates type stub files (`.pyi`) for IDE autocomplete and hover documentation
+- Enables IntelliSense for Panda3D's C++ extension modules
+
+### Build Options
+
+**System installer (DMG/EXE):**
 ```bash
+# macOS
 python makepanda/makepanda.py --everything --installer --threads 8
+
+# Windows
+python makepanda\makepanda.py --everything --installer --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads 8
 ```
+Installs Panda3D SDK system-wide with C++ headers and Python bindings.
 
-The installer will install the Panda3D SDK system-wide with C++ headers and Python bindings.
-
-Install Wheel:
-```bash
-pip install panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl
-# Or force reinstall:
-pip install --force-reinstall panda3d-1.11.0-cp314-cp314-macosx_11_0_arm64.whl
-```
-
-Build without Python bindings (C++ only):
+**C++ only (no Python bindings):**
 ```bash
 python makepanda/makepanda.py --everything --no-python --threads 8
 ```
 
-### Windows
+### Build Notes
 
-Build Python Wheel:
-```bash
-python .\makepanda\makepanda.py --everything --wheel --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=8
+- **Threading**: Adjust `--threads` based on CPU cores for faster builds
+- **Python Detection**: macOS automatically detects Homebrew Python (ARM/Intel) - no need for `--python-incdir` or `--python-libdir`
+- **FMOD**: Automatically included if libraries found in thirdparty directory
+
+---
+
+## Runtime Usage
+
+### FMOD Audio Manager Verification
+
+```python
+manager.__class__.__name__  # Returns: "AudioManager" (Python binding shows base class)
+manager.get_type()          # Returns: "FMODAudioManager" (correct!)
+manager.is_valid()          # Returns: True
 ```
 
-Build Windows Installer (Optional):
-```bash
-python .\makepanda\makepanda.py --everything --installer --msvc-version=14.3 --windows-sdk=10 --no-eigen --threads=8
+### Pause/Resume Pattern
+
+**Recommended approach** (no visual glitches with MovieTexture):
+```python
+sound.setPlayRate(0.0)  # Pause
+sound.setPlayRate(1.0)  # Resume
 ```
 
-Install Wheel:
-```bash
-pip install panda3d-1.11.0-cp314-cp314-win_amd64.whl
-# Or force reinstall:
-pip install --force-reinstall panda3d-1.11.0-cp314-cp314-win_amd64.whl
+Benefits: No visual glitches, position preserved, channel stays alive, simple.
+
+**Alternative** (causes MovieTexture glitch):
+```python
+pause_time = sound.getTime()
+sound.stop()
+sound.setTime(pause_time)
+sound.play()
+```
+Causes MovieTexture to jump to first frame because `stop()` resets internal time.
+
+### Clearing DSP Filters
+
+DSP removal requires buffer flush to avoid lingering effects:
+
+```python
+def clear_filters(self):
+    if self.sfxManagerList:
+        manager = self.sfxManagerList[0]
+
+        # Remove DSPs
+        filter_props = FilterProperties()
+        manager.configure_filters(filter_props)
+
+        # Flush buffers by restarting playback
+        if self.sound.status() == AudioSound.PLAYING:
+            current_time = self.sound.getTime()
+            was_paused = self.is_paused
+            self.sound.stop()
+            self.sound.setTime(current_time)
+            self.sound.play()
+            if was_paused:
+                self.sound.setPlayRate(0.0)
 ```
 
-### Notes
+See `samples/media-player/main.py` for complete example.
 
-- **Python Detection**: makepanda now automatically detects Homebrew Python on macOS (both ARM and Intel). No need to specify `--python-incdir` or `--python-libdir`.
-- **Threading**: Adjust `--threads` based on your CPU cores for faster builds.
-- **FMOD**: The build will automatically include FMOD Core support if libraries are found in the thirdparty directory.
+---
 
-## FMOD Audio System Changes
+## Technical Details: FMOD Core API Migration
 
-### DSP System Reversion (FMOD Core API)
+<details>
+<summary><b>DSP System Reversion (Click to expand)</b></summary>
 
-The FMOD audio manager was updated to use FMOD Core API instead of FMOD Ex, but the DSP system was reverted from individual DSP classes back to the simpler FilterProperties-based approach while maintaining FMOD Core API compatibility.
+### Overview
 
-#### What Changed
+The FMOD audio manager was updated from FMOD Ex to FMOD Core API. The DSP system was reverted from individual DSP classes back to FilterProperties-based approach while maintaining FMOD Core API compatibility.
+
+### Changes Summary
 
 **Reverted:**
 - Individual DSP class system (ChorusDSP, LowpassDSP, CompressorDSP, etc.)
@@ -92,89 +135,85 @@ The FMOD audio manager was updated to use FMOD Core API instead of FMOD Ex, but 
 - ~900 lines of DSP infrastructure code
 
 **Restored:**
-- FilterProperties-based DSP configuration using generic parameters (conf._a through conf._n)
-- Simple DSP chain management with USER_DSP_MAGIC tracking
-- Concurrent sound limiting functionality (previously not implemented in FMOD Ex version)
-- ~200 lines of simpler, more maintainable code
+- FilterProperties-based DSP configuration using generic parameters (`conf._a` through `conf._n`)
+- Simple DSP chain management with `USER_DSP_MAGIC` tracking
+- Concurrent sound limiting (previously not implemented in FMOD Ex)
+- ~200 lines of simpler code
 
 **Kept:**
 - Full FMOD Core API support
 - All DSP types: lowpass, highpass, echo, flange, distortion, normalize, parameq, pitchshift, chorus, sfxreverb, compress
-- Sound tracking with phash_set for better performance
+- Sound tracking with `phash_set` for better performance
 - Concurrent sound limit enforcement
 
-#### FMOD Core API Compatibility Fixes
+### FMOD Core API Compatibility Fixes
 
-1. **DSP Chain Management:**
-   ```cpp
-   // Old (FMOD Ex):
-   _channelgroup->getDSPHead(&head);
+**1. DSP Chain Management:**
+```cpp
+// Old (FMOD Ex):
+_channelgroup->getDSPHead(&head);
 
-   // New (FMOD Core):
-   _channelgroup->getDSP(0, &head);  // Index 0 = head DSP
-   ```
+// New (FMOD Core):
+_channelgroup->getDSP(0, &head);  // Index 0 = head DSP
+```
 
-2. **DSP Removal:**
-   ```cpp
-   // Old (FMOD Ex):
-   prev->remove();
+**2. DSP Removal:**
+```cpp
+// Old (FMOD Ex):
+prev->remove();
 
-   // New (FMOD Core):
-   _channelgroup->removeDSP(prev);  // Owner must remove DSP
-   ```
+// New (FMOD Core):
+_channelgroup->removeDSP(prev);  // Owner must remove DSP
+```
 
-3. **Parameter Setting:**
-   ```cpp
-   // Old (FMOD Ex):
-   dsp->setParameter(index, value);
+**3. Parameter Setting:**
+```cpp
+// Old (FMOD Ex):
+dsp->setParameter(index, value);
 
-   // New (FMOD Core):
-   dsp->setParameterFloat(index, value);  // Type-specific methods
-   ```
+// New (FMOD Core):
+dsp->setParameterFloat(index, value);  // Type-specific methods
+```
 
-4. **Parameter Names:**
-   - Fixed: `FMOD_DSP_NORMALIZE_THRESHHOLD` → `FMOD_DSP_NORMALIZE_THRESHOLD`
+**4. Parameter Names:**
+- Fixed: `FMOD_DSP_NORMALIZE_THRESHHOLD` → `FMOD_DSP_NORMALIZE_THRESHOLD`
 
-5. **DSP Removal from Channel Group (CRITICAL BUG FIX):**
-   ```cpp
-   // BROKEN approach (doesn't work with FMOD Core API):
-   // Traversing DSP graph using head->getInput() assumes specific connection structure
-   while (1) {
-     result = head->getNumInputs(&numinputs);
-     if (numinputs != 1) break;
-     result = head->getInput(0, &prev, nullptr);
-     if (prev->getUserData() != USER_DSP_MAGIC) break;
-     _channelgroup->removeDSP(prev);  // Never finds user DSPs!
-   }
+**5. DSP Removal from Channel Group (CRITICAL BUG FIX):**
 
-   // CORRECT approach (works with FMOD Core API):
-   // Iterate through channel group's DSP list directly
-   int numdsps = 0;
-   _channelgroup->getNumDSPs(&numdsps);
-   for (int i = numdsps - 1; i >= 0; i--) {  // Backwards to avoid index shift
-     FMOD::DSP *dsp;
-     _channelgroup->getDSP(i, &dsp);
-     void *userdata;
-     dsp->getUserData(&userdata);
-     if (userdata == USER_DSP_MAGIC) {
-       _channelgroup->removeDSP(dsp);
-       dsp->release();
-     }
-   }
-   ```
+The old graph traversal approach never found user DSPs added via `addDSP(index, dsp)`, causing filters to persist after clearing.
 
-   **Why this matters:** The old graph traversal approach never found user DSPs added via `addDSP(index, dsp)`, so `configure_filters()` with empty FilterProperties would return success but not actually remove any DSPs. This caused filters to persist even after clearing.
+```cpp
+// BROKEN (doesn't work with FMOD Core API):
+while (1) {
+  result = head->getNumInputs(&numinputs);
+  if (numinputs != 1) break;
+  result = head->getInput(0, &prev, nullptr);
+  if (prev->getUserData() != USER_DSP_MAGIC) break;
+  _channelgroup->removeDSP(prev);  // Never finds user DSPs!
+}
 
-#### Build System Setup
+// CORRECT (works with FMOD Core API):
+int numdsps = 0;
+_channelgroup->getNumDSPs(&numdsps);
+for (int i = numdsps - 1; i >= 0; i--) {  // Backwards to avoid index shift
+  FMOD::DSP *dsp;
+  _channelgroup->getDSP(i, &dsp);
+  void *userdata;
+  dsp->getUserData(&userdata);
+  if (userdata == USER_DSP_MAGIC) {
+    _channelgroup->removeDSP(dsp);
+    dsp->release();
+  }
+}
+```
 
-The FMOD Core API libraries were moved from `thirdparty/fmod/api/core/` to `thirdparty/darwin-libs-a/fmod/` to match makepanda's expected directory structure:
+### Build System Setup
 
-```bash
-# Directory structure created:
+FMOD Core API libraries moved from `thirdparty/fmod/api/core/` to `thirdparty/darwin-libs-a/fmod/`:
+
+```
 thirdparty/darwin-libs-a/fmod/
 ├── include/
-│   ├── fmod/
-│   │   └── fmod.h (symlink to ../fmod.h)
 │   ├── fmod.h
 │   ├── fmod.hpp
 │   ├── fmod_common.h
@@ -187,21 +226,21 @@ thirdparty/darwin-libs-a/fmod/
     └── libfmodL.dylib (2.8MB)
 ```
 
-The old FMOD Ex library (`thirdparty/darwin-libs-a/fmodex/`) was removed as it's no longer needed.
+Old FMOD Ex library (`thirdparty/darwin-libs-a/fmodex/`) removed.
 
-**Note:** The complete FMOD SDK remains in `thirdparty/fmod/api/` for reference and includes:
-- `core/` - FMOD Core API (headers and libraries copied to darwin-libs-a/fmod)
+**Note:** Complete FMOD SDK remains in `thirdparty/fmod/api/` for reference:
+- `core/` - FMOD Core API (copied to darwin-libs-a/fmod)
 - `studio/` - FMOD Studio API
 - `fsbank/` - FSBank API for sound bank creation
 
-#### Files Modified
+### Files Modified
 
-**Header Files:**
+**Headers:**
 - `panda/src/audiotraits/fmodAudioManager.h` - Removed DSP class methods, restored FilterProperties methods
 - `panda/src/audio/config_audio.cxx` - Removed DSP class includes
 - `panda/src/audio/p3audio_composite1.cxx` - Removed DSP class source includes
 
-**Implementation Files:**
+**Implementation:**
 - `panda/src/audiotraits/fmodAudioManager.cxx` - Replaced DSP class system with FilterProperties, fixed FMOD Core API calls
 - `panda/src/audiotraits/fmodAudioSound.cxx` - Fixed class name references (FmodAudio* → FMODAudio*)
 
@@ -210,88 +249,12 @@ The old FMOD Ex library (`thirdparty/darwin-libs-a/fmodex/`) was removed as it's
 - `built/lib/libfmodL.dylib` (2.8MB) - FMOD Core logging library
 - `built/lib/libp3fmod_audio.dylib` (162KB) - Panda3D FMOD audio module
 
-#### Benefits
+### Benefits
 
 1. **Simpler codebase:** ~700 fewer lines of DSP management code
 2. **Better compatibility:** Uses FilterProperties interface consistent with other audio backends
-3. **FMOD Core features:** Concurrent sound limiting now works (was stub in FMOD Ex version)
-4. **Maintainability:** Generic parameter approach is easier to maintain than individual DSP classes
+3. **FMOD Core features:** Concurrent sound limiting now works (was stub in FMOD Ex)
+4. **Maintainability:** Generic parameter approach easier to maintain than individual DSP classes
 5. **Performance:** No per-frame dirty DSP checks needed
 
-
-
-## Testing & Verification
-
-### FMOD Audio Manager Status
-
-FMOD Core API is working correctly in the Python wheel. Note that Python bindings show the base class name:
-```python
-manager.__class__.__name__  # Returns: "AudioManager"
-manager.get_type()          # Returns: "FMODAudioManager" (correct!)
-manager.is_valid()          # Returns: True
-```
-
-### Pause/Resume Pattern
-
-The AudioSound interface doesn't have a dedicated pause() method. The best way to implement pause/resume is using `setPlayRate()`:
-
-**Recommended pattern (no visual glitches):**
-```python
-# Pause - set play rate to 0
-sound.setPlayRate(0.0)
-
-# Resume - restore play rate
-sound.setPlayRate(1.0)
-```
-
-**Benefits:**
-- ✅ No visual glitches with synchronized MovieTexture
-- ✅ Position preserved (getTime() returns paused position)
-- ✅ Channel stays alive (status remains PLAYING)
-- ✅ Simple and clean
-
-**Alternative (has visual glitch with MovieTexture):**
-```python
-# Pause
-pause_time = sound.getTime()
-sound.stop()
-
-# Resume
-sound.setTime(pause_time)
-sound.play()
-```
-This approach causes MovieTexture to jump to first frame during pause because `stop()` resets internal time to 0.
-
-### Clearing DSP Filters
-
-When clearing DSP filters using `configure_filters()` with an empty FilterProperties, the DSPs are correctly removed from the chain, but FMOD's internal buffers still contain audio that was already processed with the effects. This causes the echo/effects to persist briefly until the buffers drain naturally.
-
-**Solution: Flush buffers by restarting playback**
-```python
-def clear_filters(self):
-    if self.sfxManagerList:
-        manager = self.sfxManagerList[0]
-
-        # Remove DSPs from chain
-        filter_props = FilterProperties()
-        manager.configure_filters(filter_props)
-
-        # Flush FMOD's internal buffers by restarting playback
-        if self.sound.status() == AudioSound.PLAYING:
-            current_time = self.sound.getTime()
-            was_paused = self.is_paused
-            self.sound.stop()
-            self.sound.setTime(current_time)
-            self.sound.play()
-            # Restore pause state if needed
-            if was_paused:
-                self.sound.setPlayRate(0.0)
-```
-
-**Benefits:**
-- ✅ Immediate feedback - filters are cleared instantly
-- ✅ Works whether paused or playing
-- ✅ Preserves playback position and pause state
-- ✅ No user-perceptible glitches
-
-See `samples/media-player/main.py` for a complete working example.
+</details>
