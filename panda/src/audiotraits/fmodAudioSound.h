@@ -72,6 +72,13 @@
 #include <fmod.hpp>
 #include <fmod_errors.h>
 
+// Compatibility shim for FMOD 2.03+ which removed the F_CALLBACK macro.
+// In FMOD 2.02, F_CALLBACK was defined as F_CALL. FMOD 2.03 removed this
+// macro, so we define it here for compatibility with both versions.
+#ifndef F_CALLBACK
+  #define F_CALLBACK F_CALL
+#endif
+
 class VirtualFile;
 
 class EXPCL_FMOD_AUDIO FMODAudioSound : public AudioSound {

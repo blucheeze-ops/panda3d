@@ -69,6 +69,8 @@ def get_fmod_paths(sdk_path, platform_type, arch):
     Returns:
         tuple: (fmod_source_path, target_base_path)
     """
+    # Strip trailing slashes/backslashes (PowerShell tab completion adds them)
+    sdk_path = sdk_path.rstrip('/\\').rstrip('"').rstrip("'")
     sdk_root = Path(sdk_path).resolve()
 
     # Construct source path - sdk_path should contain api/core/
