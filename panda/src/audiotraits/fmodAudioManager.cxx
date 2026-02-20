@@ -712,6 +712,11 @@ make_dsp(const FilterProperties::FilterConfig &conf) {
   case FilterProperties::FT_chorus:     dsptype = FMOD_DSP_TYPE_CHORUS;      break;
   case FilterProperties::FT_sfxreverb:  dsptype = FMOD_DSP_TYPE_SFXREVERB;   break;
   case FilterProperties::FT_compress:   dsptype = FMOD_DSP_TYPE_COMPRESSOR;  break;
+  case FilterProperties::FT_fader:      dsptype = FMOD_DSP_TYPE_FADER;       break;
+  case FilterProperties::FT_limiter:    dsptype = FMOD_DSP_TYPE_LIMITER;     break;
+  case FilterProperties::FT_pan:        dsptype = FMOD_DSP_TYPE_PAN;         break;
+  case FilterProperties::FT_tremolo:    dsptype = FMOD_DSP_TYPE_TREMOLO;     break;
+  case FilterProperties::FT_delay:      dsptype = FMOD_DSP_TYPE_DELAY;       break;
   default:
     audio_error("Garbage in DSP configuration data");
     return nullptr;
@@ -737,6 +742,14 @@ make_dsp(const FilterProperties::FilterConfig &conf) {
   FMOD_RESULT res12 = FMOD_OK;
   FMOD_RESULT res13 = FMOD_OK;
   FMOD_RESULT res14 = FMOD_OK;
+  FMOD_RESULT res15 = FMOD_OK;
+  FMOD_RESULT res16 = FMOD_OK;
+  FMOD_RESULT res17 = FMOD_OK;
+  FMOD_RESULT res18 = FMOD_OK;
+  FMOD_RESULT res19 = FMOD_OK;
+  FMOD_RESULT res20 = FMOD_OK;
+  FMOD_RESULT res21 = FMOD_OK;
+  FMOD_RESULT res22 = FMOD_OK;
 
   switch (conf._type) {
   case FilterProperties::FT_lowpass:
@@ -801,12 +814,84 @@ make_dsp(const FilterProperties::FilterConfig &conf) {
     res3 = dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_RELEASE,   conf._c);
     res4 = dsp->setParameterFloat(FMOD_DSP_COMPRESSOR_GAINMAKEUP,conf._d);
     break;
+  case FilterProperties::FT_fader:
+    res1 = dsp->setParameterFloat(FMOD_DSP_FADER_GAIN, conf._a);
+    break;
+  case FilterProperties::FT_limiter:
+    res1 = dsp->setParameterFloat(FMOD_DSP_LIMITER_RELEASETIME,   conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_LIMITER_CEILING,       conf._b);
+    res3 = dsp->setParameterFloat(FMOD_DSP_LIMITER_MAXIMIZERGAIN, conf._c);
+    res4 = dsp->setParameterInt  (FMOD_DSP_LIMITER_MODE, (int)conf._d);
+    break;
+  case FilterProperties::FT_pan:
+    // 22 of 24 FMOD_DSP_PAN parameters are set here.
+    // FMOD_DSP_PAN_OVERALL_GAIN is internal/read-only and intentionally skipped.
+    // FMOD_DSP_PAN_ATTENUATION_RANGE is read-only (FMOD-managed) and intentionally skipped.
+    {
+      // 2D parameters
+      res1  = dsp->setParameterInt  (FMOD_DSP_PAN_MODE,                  (int)conf._a);
+      res2  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_STEREO_POSITION,    conf._b);
+      res3  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_DIRECTION,          conf._c);
+      res4  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_EXTENT,             conf._d);
+      res5  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_ROTATION,           conf._e);
+      res6  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_LFE_LEVEL,          conf._f);
+      res7  = dsp->setParameterInt  (FMOD_DSP_PAN_2D_STEREO_MODE,        (int)conf._g);
+      res8  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_STEREO_SEPARATION,  conf._h);
+      res9  = dsp->setParameterFloat(FMOD_DSP_PAN_2D_STEREO_AXIS,        conf._i);
+      res10 = dsp->setParameterInt  (FMOD_DSP_PAN_ENABLED_SPEAKERS,      (int)conf._j);
+      // 3D position uses FMOD_DSP_PARAMETER_3DATTRIBUTES_MULTI (multi-listener
+      // variant).  numlisteners=1 covers the typical single-player case; the
+      // multi-listener case (split-screen/VR) would need a richer API.
+      // weight[0]=1.0 ensures this listener is fully active (zero-init gives 0).
+      // velocity/forward/up are hardcoded to sensible point-source defaults
+      // (no Doppler, standard FMOD orientation); expose via a future API if needed.
+      FMOD_DSP_PARAMETER_3DATTRIBUTES_MULTI attrs = {};
+      attrs.numlisteners = 1;
+      attrs.relative[0].position = {conf._k, conf._l, conf._m};
+      attrs.relative[0].velocity = {0, 0, 0};
+      attrs.relative[0].forward  = {0, 0, 1};
+      attrs.relative[0].up       = {0, 1, 0};
+      attrs.weight[0] = 1.0f;
+      res11 = dsp->setParameterData(FMOD_DSP_PAN_3D_POSITION, &attrs, sizeof(attrs));
+      // 3D distance / extent parameters
+      res12 = dsp->setParameterInt  (FMOD_DSP_PAN_3D_ROLLOFF,            (int)conf._n);
+      res13 = dsp->setParameterFloat(FMOD_DSP_PAN_3D_MIN_DISTANCE,       conf._o);
+      res14 = dsp->setParameterFloat(FMOD_DSP_PAN_3D_MAX_DISTANCE,       conf._p);
+      res15 = dsp->setParameterInt  (FMOD_DSP_PAN_3D_EXTENT_MODE,        (int)conf._q);
+      res16 = dsp->setParameterFloat(FMOD_DSP_PAN_3D_SOUND_SIZE,         conf._r);
+      res17 = dsp->setParameterFloat(FMOD_DSP_PAN_3D_MIN_EXTENT,         conf._s);
+      res18 = dsp->setParameterFloat(FMOD_DSP_PAN_3D_PAN_BLEND,          conf._t);
+      // LFE, speaker mode, height, and range override
+      res19 = dsp->setParameterInt  (FMOD_DSP_PAN_LFE_UPMIX_ENABLED,    (int)conf._u);
+      res20 = dsp->setParameterInt  (FMOD_DSP_PAN_SURROUND_SPEAKER_MODE, (int)conf._v);
+      res21 = dsp->setParameterFloat(FMOD_DSP_PAN_2D_HEIGHT_BLEND,       conf._w);
+      res22 = dsp->setParameterBool (FMOD_DSP_PAN_OVERRIDE_RANGE,        (bool)conf._x);
+    }
+    break;
+  case FilterProperties::FT_tremolo:
+    res1 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_FREQUENCY, conf._a);
+    res2 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_DEPTH,     conf._b);
+    res3 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_SHAPE,     conf._c);
+    res4 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_SKEW,      conf._d);
+    res5 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_DUTY,      conf._e);
+    res6 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_SQUARE,    conf._f);
+    res7 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_PHASE,     conf._g);
+    res8 = dsp->setParameterFloat(FMOD_DSP_TREMOLO_SPREAD,    conf._h);
+    break;
+  case FilterProperties::FT_delay:
+    // FMOD requires maxdelay to be set before the channel delays.
+    res1 = dsp->setParameterFloat(FMOD_DSP_DELAY_MAXDELAY, conf._c);
+    res2 = dsp->setParameterFloat(FMOD_DSP_DELAY_CH0,      conf._a);
+    res3 = dsp->setParameterFloat(FMOD_DSP_DELAY_CH1,      conf._b);
+    break;
   }
 
   if ((res1!=FMOD_OK)||(res2!=FMOD_OK)||(res3!=FMOD_OK)||(res4!=FMOD_OK)||
       (res5!=FMOD_OK)||(res6!=FMOD_OK)||(res7!=FMOD_OK)||(res8!=FMOD_OK)||
       (res9!=FMOD_OK)||(res10!=FMOD_OK)||(res11!=FMOD_OK)||(res12!=FMOD_OK)||
-      (res13!=FMOD_OK)||(res14!=FMOD_OK)) {
+      (res13!=FMOD_OK)||(res14!=FMOD_OK)||(res15!=FMOD_OK)||(res16!=FMOD_OK)||
+      (res17!=FMOD_OK)||(res18!=FMOD_OK)||(res19!=FMOD_OK)||(res20!=FMOD_OK)||
+      (res21!=FMOD_OK)||(res22!=FMOD_OK)) {
     audio_error("Could not configure DSP");
     dsp->release();
     return nullptr;
