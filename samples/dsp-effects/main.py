@@ -28,8 +28,8 @@ import os
 from panda3d.core import FilterProperties, TextNode
 from direct.showbase.ShowBase import ShowBase
 from direct.gui.DirectGui import (
-    DirectButton, DirectSlider, DirectLabel,
-    DirectFrame, DirectScrolledFrame,
+    DirectButton, DirectSlider, DirectLabel, DirectFrame,
+    DirectScrolledFrame,
 )
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import AudioSound
@@ -40,24 +40,27 @@ from panda3d.core import AudioSound
 # ---------------------------------------------------------------------------
 EFFECTS = [
     ("Lowpass", "add_lowpass", [
-        ("Cutoff Freq (Hz)", 10,    22000, 5000),
-        ("Resonance Q",      0.707, 10,    1.0),
+        ("Cutoff Freq (Hz)", 10, 22000, 5000),
+        ("Resonance Q",       1, 10,    1.0),   # FMOD range: 1–10
     ]),
     ("Highpass", "add_highpass", [
-        ("Cutoff Freq (Hz)", 10,    22000, 5000),
-        ("Resonance Q",      0.707, 10,    1.0),
+        ("Cutoff Freq (Hz)", 10, 22000, 5000),
+        ("Resonance Q",       1, 10,    1.0),   # FMOD range: 1–10
     ]),
     ("Echo", "add_echo", [
-        ("Dry Mix",     0,  1,    1.0),
-        ("Wet Mix",     0,  1,    0.5),
-        ("Delay (ms)",  10, 5000, 500),
-        ("Decay Ratio", 0,  1,    0.5),
+        # conf._a → ECHO_DRYLEVEL (dB), conf._b → ECHO_WETLEVEL (dB)
+        # conf._c → ECHO_DELAY (ms),    conf._d → ECHO_FEEDBACK (%)
+        ("Dry Level (dB)", -80, 10,   0),
+        ("Wet Level (dB)", -80, 10,   0),
+        ("Delay (ms)",       1, 5000, 500),
+        ("Feedback (%)",     0, 100,  50),
     ]),
     ("Flange", "add_flange", [
-        ("Dry Mix",   0,    1,  1.0),
-        ("Wet Mix",   0,    1,  0.5),
-        ("Depth",     0.01, 1,  1.0),
-        ("Rate (Hz)", 0,    20, 0.1),
+        # conf._a → FLANGE_MIX (%), conf._b unused, conf._c → DEPTH, conf._d → RATE
+        ("Mix (%)",   0,    100, 50),   # FMOD FLANGE_MIX: 0–100 %
+        ("Wet Mix",   0,    1,   0.5),  # conf._b not applied by FMOD
+        ("Depth",     0.01, 1,   1.0),
+        ("Rate (Hz)", 0,    20,  0.1),
     ]),
     ("Distort", "add_distort", [
         ("Level", 0, 1, 0.5),
@@ -78,32 +81,38 @@ EFFECTS = [
         ("Overlap",  1,   32,   4),
     ]),
     ("Chorus", "add_chorus", [
-        ("Dry Mix",    0,   1,   1.0),
-        ("Wet 1",      0,   1,   0.5),
-        ("Wet 2",      0,   1,   0.5),
-        ("Wet 3",      0,   1,   0.5),
-        ("Delay (ms)", 0.1, 100, 16),
+        # conf._a → CHORUS_MIX (%), conf._b/c/d (wet1/2/3) unused,
+        # conf._e (delay) unused, conf._f → CHORUS_RATE, conf._g → CHORUS_DEPTH
+        ("Mix (%)",    0,   100, 50),   # FMOD CHORUS_MIX: 0–100 %
+        ("Wet 1",      0,   1,   0.5),  # not applied by FMOD
+        ("Wet 2",      0,   1,   0.5),  # not applied by FMOD
+        ("Wet 3",      0,   1,   0.5),  # not applied by FMOD
+        ("Delay (ms)", 0.1, 100, 16),   # not applied by FMOD
         ("Rate (Hz)",  0,   20,  0.8),
-        ("Depth",      0,   1,   0.03),
+        ("Depth",      0,   100, 3),    # FMOD CHORUS_DEPTH: 0–100, default 3
     ]),
     ("SFX Reverb", "add_sfxreverb", [
-        ("Dry Level (dB)",        -10000, 0,     0),
-        ("Room (dB)",             -10000, 0,     -10000),
-        ("Room HF (dB)",          -10000, 0,     0),
-        ("Decay Time (s)",        0.1,    20,    1.0),
-        ("Decay HF Ratio",        0.1,    2.0,   0.5),
-        ("Reflections (dB)",      -10000, 1000,  -10000),
-        ("Reflections Delay (s)", 0,      0.3,   0.02),
-        ("Reverb Level (dB)",     -10000, 2000,  0),
-        ("Reverb Delay (s)",      0,      0.1,   0.04),
-        ("Diffusion (%)",         0,      100,   100),
-        ("Density (%)",           0,      100,   100),
-        ("HF Reference (Hz)",     1000,   20000, 5000),
-        ("Room LF (dB)",          -10000, 0,     0),
-        ("LF Reference (Hz)",     20,     1000,  250),
+        # Old EAX param names map to FMOD 2.x SFX Reverb params (values passed as-is):
+        # _a→DRYLEVEL, _b→WETLEVEL, _c→HIGHCUT, _d→DECAYTIME, _e→HFDECAYRATIO,
+        # _f→EARLYLATEMIX, _g→EARLYDELAY, _h→(unused!), _i→LATEDELAY,
+        # _j→DIFFUSION, _k→DENSITY, _l→HFREFERENCE, _m→LOWSHELFGAIN, _n→LOWSHELFFREQ
+        ("Dry Level (dB)",      -80,   20,    0),     # SFXREVERB_DRYLEVEL
+        ("Wet Level (dB)",      -80,   20,   -6),     # SFXREVERB_WETLEVEL
+        ("High Cut (Hz)",        20,   20000, 20000), # SFXREVERB_HIGHCUT
+        ("Decay Time (s)",       0.1,  20,    1.5),   # SFXREVERB_DECAYTIME
+        ("HF Decay Ratio (%)",   10,   100,   50),    # SFXREVERB_HFDECAYRATIO
+        ("Early/Late Mix (%)",    0,   100,   50),    # SFXREVERB_EARLYLATEMIX
+        ("Early Delay (ms)",      0,   300,   20),    # SFXREVERB_EARLYDELAY
+        ("(unused)",          -10000, 2000,    0),    # conf._h not applied by FMOD
+        ("Late Delay (ms)",       0,   100,   40),    # SFXREVERB_LATEDELAY
+        ("Diffusion (%)",         0,   100,  100),    # SFXREVERB_DIFFUSION
+        ("Density (%)",           0,   100,  100),    # SFXREVERB_DENSITY
+        ("HF Reference (Hz)",    20,   20000, 5000),  # SFXREVERB_HFREFERENCE
+        ("Low Shelf Gain (dB)", -36,   12,    0),     # SFXREVERB_LOWSHELFGAIN
+        ("Low Shelf Freq (Hz)",  20,   1000,  250),   # SFXREVERB_LOWSHELFFREQUENCY
     ]),
     ("Compressor", "add_compress", [
-        ("Threshold (dB)",   -60, 0,    0),
+        ("Threshold (dB)",   -80, 0,    0),   # FMOD range: -80 to 0 dB
         ("Attack (ms)",      0.1, 500,  50),
         ("Release (ms)",     10,  5000, 50),
         ("Gain Makeup (dB)", 0,   30,   0),
@@ -112,23 +121,39 @@ EFFECTS = [
         ("Gain (dB)", -80, 10, 0),
     ]),
     ("Limiter", "add_limiter", [
-        ("Release Time (ms)",     1,   1000, 60),
-        ("Ceiling (dB)",         -12,  0,    0),
-        ("Maximizer Gain (dB)",   0,   12,   0),
-        ("Mode  0=Brickwall 1=Peak", 0, 1,   0),
+        ("Release Time (ms)",   1,  1000, 1000),  # C++ default: 1000 ms
+        ("Ceiling (dB)",      -12,  0,    0),
+        ("Maximizer Gain (dB)", 0,  12,   0),
+        ("Mode",                0, [("Linked", 0), ("Independent", 1)]),
     ]),
-    # Pan exposes the first 9 of 24 parameters (stereo / basic surround).
-    # The remaining params (3D position, extent, etc.) use FMOD defaults.
     ("Pan", "add_pan", [
-        ("Mode  0=Mono 1=Stereo 2=Surround", 0, 2,    2),
-        ("Stereo Position",                  -1, 1,    0),
-        ("2D Direction",                   -180, 180,  0),
-        ("2D Extent",                         0, 360,  360),
-        ("2D Rotation",                    -180, 180,  0),
-        ("LFE Level (dB)",                  -80, 12,   0),
-        ("Stereo Mode  0=Discrete 1=Matrix",  0, 1,    1),
-        ("Stereo Separation",                 0, 360,  60),
-        ("Stereo Axis",                    -180, 180,  0),
+        # ── 2D ───────────────────────────────────────────────────────────
+        ("Mode",              2, [("Mono", 0), ("Stereo", 1), ("Surround", 2)]),
+        ("Stereo Position", -100, 100,   0),
+        ("2D Direction",    -180, 180,   0),
+        ("2D Extent",          0, 360, 360),
+        ("2D Rotation",     -180, 180,   0),
+        ("LFE Level (dB)",   -80,  20,   0),   # FMOD range: -80 to 20 dB
+        # FMOD_DSP_PAN_2D_STEREO_MODE: 0=Distributed, 1=Discrete (C++ default=1)
+        ("Stereo Mode",        1, [("Distributed", 0), ("Discrete", 1)]),
+        ("Stereo Separation", -180, 180,  60),  # FMOD range: -180 to 180 deg
+        ("Stereo Axis",     -180, 180,   0),
+        # ── 3D ───────────────────────────────────────────────────────────
+        ("Enabled Speakers",   0, 4095, 4095, int),
+        ("3D Pos X",         -50,   50,    0),
+        ("3D Pos Y",         -50,   50,    0),
+        ("3D Pos Z",         -50,   50,    0),
+        ("3D Rolloff",         0, [("LinSq", 0), ("Linear", 1), ("Inverse", 2), ("InvTap", 3), ("Custom", 4)]),
+        ("3D Min Distance",    0, 1000,    1),
+        ("3D Max Distance",    0, 1000,   20),
+        ("3D Extent Mode",     0, [("Auto", 0), ("User", 1), ("Off", 2)]),
+        ("3D Sound Size",      0,  360,    0),
+        ("3D Min Extent",      0,  360,    0),
+        ("Pan Blend",          0,    1,    0),
+        ("LFE Upmix",          0, [("Off", 0), ("On", 1)]),
+        ("Surround Mode",      0, [("Default", 0), ("Stereo", 2), ("5.1", 5), ("7.1", 6)]),
+        ("Height Blend",      -1,    1,    0),
+        ("Override Range",     1, [("Off", 0), ("On", 1)]),
     ]),
     ("Tremolo", "add_tremolo", [
         ("Frequency (Hz)", 0.1, 20, 5.0),
@@ -164,6 +189,55 @@ T_YELLOW  = (1.00, 0.95, 0.50, 1)
 T_GREEN   = (0.45, 1.00, 0.55, 1)
 
 
+class _RadioGroup:
+    """A row of buttons that acts as a radio-button selector for enum params.
+
+    Provides destroy() and get() so it can be stored alongside DirectSliders
+    in self._widgets with the same interface.
+    """
+    def __init__(self, choices, default_val, y, parent=None):
+        self._value = default_val
+        self._btns  = []
+
+        n       = len(choices)
+        btn_w   = min(0.28, 0.84 / n)   # shrink equally if many choices
+        gap     = 0.04
+        total_w = n * btn_w + (n - 1) * gap
+        x0      = -total_w / 2 + btn_w / 2  # centre the row
+
+        kw = {} if parent is None else {"parent": parent}
+        for j, (label, val) in enumerate(choices):
+            x = x0 + j * (btn_w + gap)
+            b = DirectButton(
+                text=label,
+                text_scale=0.036,
+                text_fg=T_BRIGHT,
+                frameSize=(-btn_w / 2, btn_w / 2, -0.028, 0.038),
+                frameColor=ACCENT if val == default_val else BTN_DEF,
+                relief=1,
+                pos=(x, 0, y),
+                **kw,
+            )
+            self._btns.append((b, val))
+
+        for j, (b, val) in enumerate(self._btns):
+            b["command"] = self._make_cmd(j, val)
+
+    def _make_cmd(self, sel_j, sel_val):
+        def _cmd():
+            self._value = sel_val
+            for k, (b, _) in enumerate(self._btns):
+                b["frameColor"] = ACCENT if k == sel_j else BTN_DEF
+        return _cmd
+
+    def get(self):
+        return self._value
+
+    def destroy(self):
+        for b, _ in self._btns:
+            b.destroy()
+
+
 class DspTester(ShowBase):
 
     def __init__(self):
@@ -178,8 +252,8 @@ class DspTester(ShowBase):
         self._paused = False
 
         # ── state ──────────────────────────────────────────────────────────
-        self._sel_idx = 0           # index into EFFECTS
-        self._sliders = []          # [(DirectSlider, DirectLabel)]
+        self._sel_idx  = 0   # index into EFFECTS
+        self._widgets  = []  # [(widget, DirectLabel, choices_or_None)]
         self._chain   = []          # [(display_name, method_name, [values])]
         self._btns    = []
 
@@ -247,30 +321,33 @@ class DspTester(ShowBase):
             fg=T_GREEN, align=TextNode.ACenter,
         )
 
-        # Scrollable region — deep enough for SFX Reverb's 14 params
+        # Scrollable region for parameter widgets.
         self._scroll = DirectScrolledFrame(
-            frameSize=(-0.62, 0.61, -0.76, 0.74),
-            canvasSize=(-0.60, 0.58, -2.80, 0.70),
-            scrollBarWidth=0.040,
+            frameSize=(-0.62, 0.61, -0.82, 0.72),
+            canvasSize=(-0.60, 0.57, -0.82, 0.72),
             frameColor=(0.07, 0.07, 0.11, 1),
-            pos=(0.0, 0, 0.0),
+            scrollBarWidth=0.04,
+            pos=(0, 0, 0),
+            verticalScroll_frameColor=BTN_DEF,
+            verticalScroll_thumb_frameColor=ACCENT,
+            verticalScroll_relief=1,
+            horizontalScroll_frameSize=(0, 0, 0, 0),
         )
-        self._canvas = self._scroll.getCanvas()
 
-        # Apply / Clear buttons sit below the scroll area
+        # Apply / Clear buttons sit below the scroll area, centred in the panel.
         DirectButton(
             text="Apply Effect  [Enter]",
-            text_scale=0.043, text_fg=T_BRIGHT,
-            frameSize=(-0.29, 0.29, -0.039, 0.055),
+            text_scale=0.040, text_fg=T_BRIGHT,
+            frameSize=(-0.26, 0.26, -0.039, 0.055),
             frameColor=BTN_GREEN, relief=1,
-            pos=(-0.20, 0, -0.876), command=self._apply,
+            pos=(-0.29, 0, -0.876), command=self._apply,
         )
         DirectButton(
             text="Clear All  [C]",
             text_scale=0.043, text_fg=T_BRIGHT,
-            frameSize=(-0.22, 0.22, -0.039, 0.055),
+            frameSize=(-0.26, 0.26, -0.039, 0.055),
             frameColor=BTN_RED, relief=1,
-            pos=(0.46, 0, -0.876), command=self._clear,
+            pos=(0.29, 0, -0.876), command=self._clear,
         )
 
         # ── RIGHT PANEL: playback + chain list ───────────────────────────────
@@ -346,44 +423,69 @@ class DspTester(ShowBase):
         self._rebuild_sliders(idx)
 
     def _rebuild_sliders(self, idx):
-        for sl, lbl in self._sliders:
-            sl.destroy()
+        for widget, lbl, *_ in self._widgets:
+            widget.destroy()
             lbl.destroy()
-        self._sliders.clear()
+        self._widgets.clear()
 
-        params = EFFECTS[idx][2]
-        slot_h = 0.115
-        y0     = 0.60
+        params  = EFFECTS[idx][2]
+        slot_h  = 0.120          # comfortable fixed spacing
+        y0      = 0.63
+        canvas  = self._scroll.getCanvas()
 
-        for i, (label_text, pmin, pmax, default) in enumerate(params):
+        # Resize canvas to fit all params, then scroll back to top.
+        canvas_bottom = min(-0.82, y0 - (len(params) - 1) * slot_h - 0.15)
+        self._scroll['canvasSize'] = (-0.60, 0.57, canvas_bottom, 0.72)
+        self._scroll.verticalScroll['value'] = 0
+
+        for i, param in enumerate(params):
+            label_text = param[0]
             y = y0 - i * slot_h
 
-            lbl = DirectLabel(
-                text=f"{label_text}: {default:.4g}",
-                text_scale=0.035,
-                text_fg=T_BRIGHT,
-                text_align=TextNode.ALeft,
-                frameColor=(0, 0, 0, 0),
-                pos=(-0.56, 0, y + 0.046),
-                parent=self._canvas,
-            )
-            sl = DirectSlider(
-                range=(pmin, pmax),
-                value=default,
-                pageSize=(pmax - pmin) / 20.0,
-                scale=0.52,
-                pos=(0.02, 0, y),
-                parent=self._canvas,
-                command=self._slider_moved,
-                extraArgs=[i, label_text, lbl],
-            )
-            self._sliders.append((sl, lbl))
+            if isinstance(param[2], list):
+                # ── Radio-button group: (label, default_value, [(label, value)]) ──
+                default_val, choices = param[1], param[2]
 
-        # Scroll back to top whenever the effect changes
-        self._scroll.verticalScroll["value"] = 0
+                lbl = DirectLabel(
+                    parent=canvas,
+                    text=label_text,
+                    text_scale=0.034,
+                    text_fg=T_DIM,
+                    text_align=TextNode.ALeft,
+                    frameColor=(0, 0, 0, 0),
+                    pos=(-0.56, 0, y + 0.065),
+                )
+                widget = _RadioGroup(choices, default_val, y, parent=canvas)
+                self._widgets.append((widget, lbl, choices, int))
+
+            else:
+                # ── Float slider: (label, min, max, default[, cast]) ────────────
+                pmin, pmax, default = param[1], param[2], param[3]
+                cast = param[4] if len(param) > 4 else float
+
+                lbl = DirectLabel(
+                    parent=canvas,
+                    text=f"{label_text}: {default:.4g}",
+                    text_scale=0.034,
+                    text_fg=T_BRIGHT,
+                    text_align=TextNode.ALeft,
+                    frameColor=(0, 0, 0, 0),
+                    pos=(-0.56, 0, y + 0.050),
+                )
+                widget = DirectSlider(
+                    parent=canvas,
+                    range=(pmin, pmax),
+                    value=default,
+                    pageSize=(pmax - pmin) / 20.0,
+                    scale=0.40,
+                    pos=(0.02, 0, y),
+                    command=self._slider_moved,
+                    extraArgs=[i, label_text, lbl],
+                )
+                self._widgets.append((widget, lbl, None, cast))
 
     def _slider_moved(self, idx, label_text, lbl):
-        val = self._sliders[idx][0]["value"]
+        val = self._widgets[idx][0]["value"]
         lbl["text"] = f"{label_text}: {val:.4g}"
 
     # -----------------------------------------------------------------------
@@ -392,8 +494,13 @@ class DspTester(ShowBase):
 
     def _apply(self):
         name, method = EFFECTS[self._sel_idx][:2]
-        vals = [sl["value"] for sl, _ in self._sliders]
-        self._chain.append((name, method, list(vals)))
+        vals = []
+        for widget, _, choices, cast in self._widgets:
+            if choices is not None:
+                vals.append(widget.get())        # _RadioGroup.get() returns int
+            else:
+                vals.append(cast(widget["value"]))
+        self._chain.append((name, method, vals))
         self._push_filters()
         self._refresh_chain_label()
 

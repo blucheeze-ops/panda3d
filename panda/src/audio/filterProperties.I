@@ -155,17 +155,17 @@ add_limiter(PN_stdfloat releasetime, PN_stdfloat ceiling,
  * override_range:      1=use min/max_distance, 0=use FMOD attenuation range
  */
 INLINE void FilterProperties::
-add_pan(PN_stdfloat mode, PN_stdfloat stereo_position,
+add_pan(int mode, PN_stdfloat stereo_position,
         PN_stdfloat direction, PN_stdfloat extent_2d,
         PN_stdfloat rotation, PN_stdfloat lfe_level,
-        PN_stdfloat stereo_mode, PN_stdfloat stereo_separation,
-        PN_stdfloat stereo_axis, PN_stdfloat enabled_speakers,
+        int stereo_mode, PN_stdfloat stereo_separation,
+        PN_stdfloat stereo_axis, int enabled_speakers,
         PN_stdfloat pos_3d_x, PN_stdfloat pos_3d_y, PN_stdfloat pos_3d_z,
-        PN_stdfloat rolloff, PN_stdfloat min_distance, PN_stdfloat max_distance,
-        PN_stdfloat extent_mode, PN_stdfloat sound_size, PN_stdfloat min_extent,
-        PN_stdfloat pan_blend, PN_stdfloat lfe_upmix_enabled,
-        PN_stdfloat surround_speaker_mode, PN_stdfloat height_blend,
-        PN_stdfloat override_range) {
+        int rolloff, PN_stdfloat min_distance, PN_stdfloat max_distance,
+        int extent_mode, PN_stdfloat sound_size, PN_stdfloat min_extent,
+        PN_stdfloat pan_blend, bool lfe_upmix_enabled,
+        int surround_speaker_mode, PN_stdfloat height_blend,
+        bool override_range) {
   add_filter(FT_pan,
              mode, stereo_position, direction, extent_2d,
              rotation, lfe_level, stereo_mode, stereo_separation,
