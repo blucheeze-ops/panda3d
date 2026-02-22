@@ -71,6 +71,8 @@ PUBLISHED:
   virtual int get_speaker_setup();
   virtual void set_speaker_setup(SpeakerModeCategory cat);
   virtual bool configure_filters(FilterProperties *config);
+  FilterProperties *get_filters() const;
+  virtual bool update_filters(FilterProperties *config);
 
   // DSP methods
   INLINE bool add_dsp_to_head(DSP *dsp);
@@ -202,6 +204,7 @@ protected:
 
   static Create_AudioManager_proc* _create_AudioManager;
   AtomicAdjust::Pointer _null_sound;
+  PT(FilterProperties) _active_filters;
 
   AudioManager();
 

@@ -96,6 +96,7 @@ public:
   virtual ~FMODAudioManager();
 
   virtual bool configure_filters(FilterProperties *config);
+  virtual bool update_filters(FilterProperties *config);
 
   virtual bool is_valid();
 

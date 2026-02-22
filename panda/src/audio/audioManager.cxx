@@ -203,6 +203,32 @@ configure_filters(FilterProperties *config) {
 }
 
 /**
+ * Returns a deep copy of the FilterProperties that was last passed to
+ * configure_filters(), or nullptr if configure_filters() has not been called.
+ * The returned object is independent of the manager's stored state; modify it
+ * and pass it to update_filters() to push changes to the active DSP chain.
+ */
+FilterProperties *AudioManager::
+get_filters() const {
+  if (_active_filters == nullptr) {
+    return nullptr;
+  }
+  return new FilterProperties(*_active_filters);
+}
+
+/**
+ * Updates the parameters of the active DSP chain in-place using the supplied
+ * FilterProperties.  The structure (number of DSPs and their types) must
+ * match the currently active chain exactly, or the call returns false without
+ * making any changes.  Returns true on success.
+ */
+bool AudioManager::
+update_filters(FilterProperties *config) {
+  // Base class does not support in-place DSP updates.
+  return false;
+}
+
+/**
  * Inserts the specified DSP filter into the DSP chain at the specified index.
  * Returns true if the DSP filter is supported by the audio implementation,
  * false otherwise.
