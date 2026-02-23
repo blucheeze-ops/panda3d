@@ -8,12 +8,13 @@ using the FMOD audio backend.
 Controls
 --------
   Left panel   : click an effect to select it
-  Center panel : adjust parameter sliders, then press Apply to add to the chain
-  Right panel  : play/pause/stop, volume, active chain display
+  Center panel : adjust parameter sliders, then press Apply to add to chain
+  Right panel  : play/pause/stop, volume, active chain (click a slot to edit it)
 
   Space  - Play / Pause
   S      - Stop
-  Enter  - Apply current effect
+  Enter  - Apply current effect (adds new slot, always rebuilds chain)
+  U      - Update selected chain slot in-place (no FMOD chain rebuild)
   C      - Clear all effects
 """
 
@@ -31,6 +32,7 @@ from direct.gui.DirectGui import (
     DirectButton, DirectSlider, DirectLabel, DirectFrame,
     DirectScrolledFrame,
 )
+from direct.gui import DirectGuiGlobals as DGG
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import AudioSound
 
@@ -233,6 +235,11 @@ class _RadioGroup:
     def get(self):
         return self._value
 
+    def set(self, val):
+        self._value = val
+        for k, (b, v) in enumerate(self._btns):
+            b["frameColor"] = ACCENT if v == val else BTN_DEF
+
     def destroy(self):
         for b, _ in self._btns:
             b.destroy()
@@ -252,10 +259,12 @@ class DspTester(ShowBase):
         self._paused = False
 
         # ── state ──────────────────────────────────────────────────────────
-        self._sel_idx  = 0   # index into EFFECTS
-        self._widgets  = []  # [(widget, DirectLabel, choices_or_None)]
-        self._chain   = []          # [(display_name, method_name, [values])]
-        self._btns    = []
+        self._sel_idx     = 0     # index into EFFECTS
+        self._widgets     = []    # [(widget, DirectLabel, choices_or_None, cast)]
+        self._chain       = []    # [(display_name, method_name, [values])]
+        self._btns        = []    # left-panel effect selector buttons
+        self._chain_btns  = []    # right-panel active-chain slot buttons
+        self._editing_slot: int | None = None  # None = add-new mode
 
         # ── build UI & select first effect ─────────────────────────────────
         self._build_ui()
@@ -266,6 +275,8 @@ class DspTester(ShowBase):
         self.accept("s",     self._stop)
         self.accept("S",     self._stop)
         self.accept("enter", self._apply)
+        self.accept("u",     self._update_slot)
+        self.accept("U",     self._update_slot)
         self.accept("c",     self._clear)
         self.accept("C",     self._clear)
 
@@ -334,20 +345,28 @@ class DspTester(ShowBase):
             horizontalScroll_frameSize=(0, 0, 0, 0),
         )
 
-        # Apply / Clear buttons sit below the scroll area, centred in the panel.
+        # Apply / Update / Clear buttons sit below the scroll area.
         DirectButton(
-            text="Apply Effect  [Enter]",
-            text_scale=0.040, text_fg=T_BRIGHT,
-            frameSize=(-0.26, 0.26, -0.039, 0.055),
+            text="Apply  [Enter]",
+            text_scale=0.038, text_fg=T_BRIGHT,
+            frameSize=(-0.19, 0.19, -0.039, 0.055),
             frameColor=BTN_GREEN, relief=1,
-            pos=(-0.29, 0, -0.876), command=self._apply,
+            pos=(-0.44, 0, -0.876), command=self._apply,
+        )
+        self._update_btn = DirectButton(
+            text="Update  [U]",
+            text_scale=0.038, text_fg=T_BRIGHT,
+            frameSize=(-0.19, 0.19, -0.039, 0.055),
+            frameColor=BTN_DEF, relief=1,
+            pos=(0, 0, -0.876), command=self._update_slot,
+            state=DGG.DISABLED,
         )
         DirectButton(
             text="Clear All  [C]",
-            text_scale=0.043, text_fg=T_BRIGHT,
-            frameSize=(-0.26, 0.26, -0.039, 0.055),
+            text_scale=0.038, text_fg=T_BRIGHT,
+            frameSize=(-0.19, 0.19, -0.039, 0.055),
             frameColor=BTN_RED, relief=1,
-            pos=(0.29, 0, -0.876), command=self._clear,
+            pos=(0.44, 0, -0.876), command=self._clear,
         )
 
         # ── RIGHT PANEL: playback + chain list ───────────────────────────────
@@ -393,12 +412,9 @@ class DspTester(ShowBase):
         )
 
         OnscreenText(
-            text="Active Chain", pos=(RX, 0.04),
-            scale=0.045, fg=T_DIM, align=TextNode.ACenter,
-        )
-        self._chain_lbl = OnscreenText(
-            text="(none)", pos=(RX, -0.07),
-            scale=0.035, fg=T_GREEN, align=TextNode.ACenter,
+            text="Active Chain  (click to edit)",
+            pos=(RX, 0.04),
+            scale=0.040, fg=T_DIM, align=TextNode.ACenter,
         )
 
         self._status_lbl = OnscreenText(
@@ -414,8 +430,11 @@ class DspTester(ShowBase):
 
     def _select(self, idx):
         self._sel_idx = idx
-        name = EFFECTS[idx][0]
+        self._editing_slot = None
+        self._update_btn["state"]      = DGG.DISABLED
+        self._update_btn["frameColor"] = BTN_DEF
 
+        name = EFFECTS[idx][0]
         for i, btn in enumerate(self._btns):
             btn["frameColor"] = ACCENT if i == idx else BTN_DEF
 
@@ -501,14 +520,22 @@ class DspTester(ShowBase):
             else:
                 vals.append(cast(widget["value"]))
         self._chain.append((name, method, vals))
+        # Apply always rebuilds the full chain.
         self._push_filters()
-        self._refresh_chain_label()
+        # Exit edit mode (Apply adds a new slot, never overwrites).
+        self._editing_slot = None
+        self._update_btn["state"]      = DGG.DISABLED
+        self._update_btn["frameColor"] = BTN_DEF
+        self._rebuild_chain_buttons()
 
     def _clear(self):
         self._chain.clear()
+        self._editing_slot = None
+        self._update_btn["state"]      = DGG.DISABLED
+        self._update_btn["frameColor"] = BTN_DEF
         if self.sfxManagerList:
             self.sfxManagerList[0].configure_filters(FilterProperties())
-        self._refresh_chain_label()
+        self._rebuild_chain_buttons()
 
     def _push_filters(self):
         fp = FilterProperties()
@@ -517,12 +544,74 @@ class DspTester(ShowBase):
         if self.sfxManagerList:
             self.sfxManagerList[0].configure_filters(fp)
 
-    def _refresh_chain_label(self):
-        if not self._chain:
-            self._chain_lbl.setText("(none)")
-        else:
-            lines = [f"{i + 1}. {entry[0]}" for i, entry in enumerate(self._chain)]
-            self._chain_lbl.setText("\n".join(lines))
+    def _load_vals_into_widgets(self, vals):
+        """Override freshly-created widgets with saved chain-slot values."""
+        params = EFFECTS[self._sel_idx][2]
+        for i, (widget, lbl, choices, cast) in enumerate(self._widgets):
+            if i >= len(vals):
+                break
+            val = vals[i]
+            if choices is not None:          # _RadioGroup
+                widget.set(val)
+            else:                            # DirectSlider
+                widget["value"] = val
+                lbl["text"] = f"{params[i][0]}: {val:.4g}"
+
+    def _select_chain_slot(self, i):
+        """Click handler for an active-chain slot button."""
+        name, method, vals = self._chain[i]
+        eff_idx = next(j for j, e in enumerate(EFFECTS) if e[1] == method)
+        self._select(eff_idx)              # rebuilds widgets with defaults; resets editing_slot
+        self._load_vals_into_widgets(vals)
+        self._editing_slot = i
+        self._update_btn["state"]      = DGG.NORMAL
+        self._update_btn["frameColor"] = BTN_BLUE
+        self._rebuild_chain_buttons()      # re-draw to highlight selected slot
+
+    def _update_slot(self):
+        """Update the selected chain slot in-place (no FMOD chain rebuild)."""
+        if self._editing_slot is None:
+            return
+        name, method, _ = self._chain[self._editing_slot]
+        vals = [cast(w.get() if ch is not None else w["value"])
+                for w, _, ch, cast in self._widgets]
+        self._chain[self._editing_slot] = (name, method, vals)
+
+        fp = FilterProperties()
+        for _, m, v in self._chain:
+            getattr(fp, m)(*v)
+
+        mgr = self.sfxManagerList[0] if self.sfxManagerList else None
+        if mgr:
+            ok = mgr.update_filters(fp)
+            if not ok:
+                mgr.configure_filters(fp)  # fallback: structure mismatch
+
+        self._rebuild_chain_buttons()
+
+    def _rebuild_chain_buttons(self):
+        """Recreate the clickable chain-slot buttons in the right panel."""
+        for b in self._chain_btns:
+            b.destroy()
+        self._chain_btns.clear()
+
+        RX     = 1.21
+        slot_h = 0.072
+        y0     = -0.08   # just below "Active Chain" header
+
+        for i, (name, _, _) in enumerate(self._chain):
+            is_sel = (i == self._editing_slot)
+            btn = DirectButton(
+                text=f"{i + 1}. {name}",
+                text_scale=0.030, text_fg=T_BRIGHT,
+                frameSize=(-0.33, 0.33, -0.022, 0.038),
+                frameColor=ACCENT if is_sel else BTN_DEF,
+                relief=1,
+                pos=(RX, 0, y0 - i * slot_h),
+                command=self._select_chain_slot,
+                extraArgs=[i],
+            )
+            self._chain_btns.append(btn)
 
     # -----------------------------------------------------------------------
     # Playback
