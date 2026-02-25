@@ -799,7 +799,7 @@ apply_dsp_params(FMOD::DSP *dsp, const FilterProperties::FilterConfig &conf) {
     chk(dsp->setParameterFloat(FMOD_DSP_LIMITER_RELEASETIME,   conf._a));
     chk(dsp->setParameterFloat(FMOD_DSP_LIMITER_CEILING,       conf._b));
     chk(dsp->setParameterFloat(FMOD_DSP_LIMITER_MAXIMIZERGAIN, conf._c));
-    chk(dsp->setParameterInt  (FMOD_DSP_LIMITER_MODE, (int)conf._d));
+    chk(dsp->setParameterBool (FMOD_DSP_LIMITER_MODE, (bool)conf._d));
     break;
   case FilterProperties::FT_pan:
     // 22 of 24 FMOD_DSP_PAN parameters are set here.
@@ -981,7 +981,7 @@ update_filters(FilterProperties *config) {
     if (existing_type != filter_type_to_fmod(conf[i]._type)) return false;
   }
 
-  // Structure matches — push updated parameters directly to FMOD.
+  // Structure matches -- push updated parameters directly to FMOD.
   for (size_t i = 0; i < conf.size(); i++) {
     apply_dsp_params(user_dsps[i], conf[i]);
   }

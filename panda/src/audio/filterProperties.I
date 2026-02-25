@@ -214,7 +214,7 @@ get_num_filters() const {
 }
 
 // ---------------------------------------------------------------------------
-// Per-slot readers — helper macro to reduce boilerplate
+// Per-slot readers -- helper macro to reduce boilerplate
 // ---------------------------------------------------------------------------
 #define FP_READ_GUARD(idx, ft) \
   PTA_stdfloat r; \
@@ -407,7 +407,7 @@ get_delay_config(int index) const {
 #undef FP_READ_GUARD
 
 // ---------------------------------------------------------------------------
-// Per-slot writers — helper macro to reduce boilerplate
+// Per-slot writers -- helper macro to reduce boilerplate
 // ---------------------------------------------------------------------------
 #define FP_WRITE_GUARD(idx, ft) \
   if ((idx) < 0 || (idx) >= (int)_config.size()) return false; \

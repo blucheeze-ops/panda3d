@@ -126,7 +126,7 @@ EFFECTS = [
         ("Release Time (ms)",   1,  1000, 1000),  # C++ default: 1000 ms
         ("Ceiling (dB)",      -12,  0,    0),
         ("Maximizer Gain (dB)", 0,  12,   0),
-        ("Mode",                0, [("Linked", 0), ("Independent", 1)]),
+        ("Mode",                0, [("Independent", 0), ("Linked", 1)]),
     ]),
     ("Pan", "add_pan", [
         # ── 2D ───────────────────────────────────────────────────────────
@@ -321,24 +321,25 @@ class DspTester(ShowBase):
             self._btns.append(btn)
 
         # ── CENTER PANEL: parameter sliders ─────────────────────────────────
-        # Panel background spans x: -0.66 → 0.66  (width 1.32)
+        # Panel background spans x: -0.70 → 0.82  (width 1.52, flush with neighbours)
         DirectFrame(
-            frameSize=(0, 1.32, -0.97, 0.90),
-            frameColor=PANEL, pos=(-0.66, 0, 0),
+            frameSize=(0, 1.52, -0.97, 0.90),
+            frameColor=PANEL, pos=(-0.70, 0, 0),
         )
 
         self._effect_title = OnscreenText(
-            text="", pos=(0.0, 0.82), scale=0.056,
+            text="", pos=(0.06, 0.82), scale=0.056,
             fg=T_GREEN, align=TextNode.ACenter,
         )
 
         # Scrollable region for parameter widgets.
+        # Centre of panel is x=0.06; top raised to 0.77 (close to title at 0.82).
         self._scroll = DirectScrolledFrame(
-            frameSize=(-0.62, 0.61, -0.82, 0.72),
-            canvasSize=(-0.60, 0.57, -0.82, 0.72),
+            frameSize=(-0.70, 0.70, -0.82, 0.77),
+            canvasSize=(-0.68, 0.65, -0.82, 0.77),
             frameColor=(0.07, 0.07, 0.11, 1),
             scrollBarWidth=0.04,
-            pos=(0, 0, 0),
+            pos=(0.06, 0, 0),
             verticalScroll_frameColor=BTN_DEF,
             verticalScroll_thumb_frameColor=ACCENT,
             verticalScroll_relief=1,
@@ -351,14 +352,14 @@ class DspTester(ShowBase):
             text_scale=0.038, text_fg=T_BRIGHT,
             frameSize=(-0.19, 0.19, -0.039, 0.055),
             frameColor=BTN_GREEN, relief=1,
-            pos=(-0.44, 0, -0.876), command=self._apply,
+            pos=(-0.38, 0, -0.876), command=self._apply,
         )
         self._update_btn = DirectButton(
             text="Update  [U]",
             text_scale=0.038, text_fg=T_BRIGHT,
             frameSize=(-0.19, 0.19, -0.039, 0.055),
             frameColor=BTN_DEF, relief=1,
-            pos=(0, 0, -0.876), command=self._update_slot,
+            pos=(0.06, 0, -0.876), command=self._update_slot,
             state=DGG.DISABLED,
         )
         DirectButton(
@@ -366,11 +367,11 @@ class DspTester(ShowBase):
             text_scale=0.038, text_fg=T_BRIGHT,
             frameSize=(-0.19, 0.19, -0.039, 0.055),
             frameColor=BTN_RED, relief=1,
-            pos=(0.44, 0, -0.876), command=self._clear,
+            pos=(0.50, 0, -0.876), command=self._clear,
         )
 
         # ── RIGHT PANEL: playback + chain list ───────────────────────────────
-        # Panel background spans x: 0.82 → 1.60  (width 0.78)
+        # Panel background spans x: 0.82 → 1.60  (width 0.78, flush with centre)
         DirectFrame(
             frameSize=(0, 0.78, -0.97, 0.90),
             frameColor=PANEL, pos=(0.82, 0, 0),
@@ -454,7 +455,7 @@ class DspTester(ShowBase):
 
         # Resize canvas to fit all params, then scroll back to top.
         canvas_bottom = min(-0.82, y0 - (len(params) - 1) * slot_h - 0.15)
-        self._scroll['canvasSize'] = (-0.60, 0.57, canvas_bottom, 0.72)
+        self._scroll['canvasSize'] = (-0.68, 0.65, canvas_bottom, 0.77)
         self._scroll.verticalScroll['value'] = 0
 
         for i, param in enumerate(params):

@@ -78,7 +78,7 @@ class EXPCL_PANDA_AUDIO FilterProperties : public TypedReferenceCount {
   // Query
   INLINE int get_num_filters() const;
 
-  // Per-slot readers — return values in the same order as the corresponding
+  // Per-slot readers -- return values in the same order as the corresponding
   // add_* parameters.  Returns an empty list if the slot index is out of
   // range or the DSP type at that slot does not match.
   INLINE PTA_stdfloat get_lowpass_config   (int index) const;
@@ -98,7 +98,7 @@ class EXPCL_PANDA_AUDIO FilterProperties : public TypedReferenceCount {
   INLINE PTA_stdfloat get_tremolo_config   (int index) const;
   INLINE PTA_stdfloat get_delay_config     (int index) const;
 
-  // Per-slot writers — mutate the parameters of an existing slot in-place.
+  // Per-slot writers -- mutate the parameters of an existing slot in-place.
   // Returns false if the index is out of range or the DSP type at that slot
   // does not match; returns true on success.
   INLINE bool update_lowpass   (int index, PN_stdfloat cutoff_freq, PN_stdfloat resonance_q);
