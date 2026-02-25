@@ -25,9 +25,45 @@ To enable it, uncomment the 5.1 line below, then:
   2. System Settings → AirPods Pro → Spatial Audio → Fixed or Head Tracked.
   3. Run this script and switch to [P] Surround orbit.
 
+Why update_filters is required for per-frame DSP animation
+-----------------------------------------------------------
+configure_filters() performs a full DSP chain teardown and rebuild every time
+it is called.  Using it every frame causes two problems:
+
+  Lowpass: between removing the old DSP and inserting the new one the audio
+  passes through the chain unfiltered.  At 60+ fps this creates ~60 brief
+  full-bandwidth bursts per second, heard as static or rapid clicking.
+
+  Pan: the Pan DSP maintains an internal panning matrix that is computed
+  incrementally as it processes audio buffers.  A freshly created DSP always
+  starts in default/unity (center) state.  When configure_filters() destroys
+  and recreates the DSP on every frame the DSP never lives long enough to
+  process audio and establish its panned state -- so no panning is heard.
+
+update_filters() pushes new parameter values directly onto the DSPs that are
+already alive in the chain.  The DSPs are never removed, so there is no gap
+in filtering (no static) and the Pan DSP retains its warm, computed matrix
+(panning works correctly).
+
+configure_filters() is still correct for "set once, listen" use cases (e.g.
+pressing a button to apply a Pan or Lowpass effect and leaving it in place).
+In that pattern the DSP has all the time it needs to process audio and reach
+steady state before the user can press anything again.  The failure mode only
+occurs when configure_filters() is called faster than the Pan DSP's warmup
+time (~2 audio buffers, roughly 20 ms at 48 kHz / 512 samples).
+
+Rule of thumb:
+  configure_filters() -- use when the chain *structure* changes
+                         (adding or removing effect slots), or when a
+                         parameter is set once and left in place.
+  update_filters()    -- use when parameters change continuously over
+                         time (animation, real-time control, per-frame
+                         position updates, etc.).
+
 Controls
 --------
   S / P / L   Stereo sweep / Surround orbit / Lowpass sweep
+  F           Toggle per-frame method: update_filters (default) / configure_filters
   Up / Down   Faster / slower
   Q / Esc     Quit
 """
@@ -69,9 +105,10 @@ class PanCircle(ShowBase):
         self.sfx.setLoop(True)
         self.sfx.play()
 
-        self._speed = SPEED_DEFAULT
-        self._mode  = "stereo"
-        self._fp    = FilterProperties()
+        self._speed           = SPEED_DEFAULT
+        self._mode            = "stereo"
+        self._fp              = FilterProperties()
+        self._use_configure   = False   # F toggles configure_filters vs update_filters
 
         self._build_ui()
         self._build_compass()
@@ -85,6 +122,8 @@ class PanCircle(ShowBase):
         self.accept("P",                 self._use_orbit)
         self.accept("l",                 self._use_lowpass)
         self.accept("L",                 self._use_lowpass)
+        self.accept("f",                 self._toggle_filter_method)
+        self.accept("F",                 self._toggle_filter_method)
         self.accept("arrow_up",          self._faster)
         self.accept("arrow_down",        self._slower)
         self.accept("arrow_up-repeat",   self._faster)
@@ -110,6 +149,10 @@ class PanCircle(ShowBase):
         self._ok_lbl = OnscreenText(
             text="", pos=(0, 0.59), scale=0.050,
             fg=(1.0, 0.75, 0.3, 1), align=TextNode.ACenter,
+        )
+        self._method_lbl = OnscreenText(
+            text=self._method_text(), pos=(0, 0.45), scale=0.042,
+            fg=(0.6, 1.0, 0.8, 1), align=TextNode.ACenter,
         )
         self._spd_lbl = OnscreenText(
             text=self._speed_text(), pos=(0, -0.90), scale=0.045,
@@ -211,55 +254,57 @@ class PanCircle(ShowBase):
         r = self._compass_radius
 
         if self._mode == "stereo":
-            # stereo_position: -100 = full left, +100 = full right.
             stereo_pos = math.sin(t) * 100.0
-            self._fp.update_pan(0, STEREO, stereo_pos)
-            ok = mgr.update_filters(self._fp)
-            # Dot moves left/right only (no front/back in stereo mode).
+            if self._use_configure:
+                self._fp.clear()
+                self._fp.add_pan(STEREO, stereo_pos)
+                ok = mgr.configure_filters(self._fp)
+            else:
+                self._fp.update_pan(0, STEREO, stereo_pos)
+                ok = mgr.update_filters(self._fp)
             self._dot_np.setPos(stereo_pos / 100.0 * r, 0, 0)
             self._pos_lbl.setText(f"stereo_position: {stereo_pos:+.1f}")
-            self._ok_lbl.setText(f"update_filters: {ok}")
+            self._ok_lbl.setText(f"{self._method_name()}: {ok}")
 
         elif self._mode == "orbit":
-            # Normal circular orbit in XZ plane, radius 1.0, y=0.
-            x = math.sin(t)   # +right  −left
-            z = math.cos(t)   # +forward  −backward
-            direction = math.degrees(math.atan2(x, z))  # for display only
-            self._fp.update_pan(
-                0,               # slot index
-                SURROUND,        # mode
-                0.0,             # stereo_position  (unused)
-                0.0,             # direction        (unused when pan_blend=1)
-                0.0,             # extent_2d = 0 → point source
-                0.0,             # rotation
-                0.0,             # lfe_level
-                DISTRIBUTED,     # stereo_mode
-                60.0,            # stereo_separation
-                0.0,             # stereo_axis
-                ALL_SPEAKERS,    # enabled_speakers
-                x, 0.0, z,       # pos_3d: orbiting in XZ plane at ear level
-                ROLLOFF_LIN,     # rolloff
-                0.5, 5.0,        # min/max distance
-                0,               # extent_mode
-                0.0, 0.0,        # sound_size, min_extent
-                1.0,             # pan_blend = 1 → 3D position
-                False,           # lfe_upmix_enabled
-                0,               # surround_speaker_mode
-                0.0,             # height_blend
-                True,            # override_range
-            )
-            ok = mgr.update_filters(self._fp)
+            x = math.sin(t)
+            z = math.cos(t)
+            direction = math.degrees(math.atan2(x, z))
+            if self._use_configure:
+                self._fp.clear()
+                self._fp.add_pan(
+                    SURROUND, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    DISTRIBUTED, 60.0, 0.0, ALL_SPEAKERS,
+                    x, 0.0, z,
+                    ROLLOFF_LIN, 0.5, 5.0, 0, 0.0, 0.0,
+                    1.0, False, 0, 0.0, True,
+                )
+                ok = mgr.configure_filters(self._fp)
+            else:
+                self._fp.update_pan(
+                    0, SURROUND, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    DISTRIBUTED, 60.0, 0.0, ALL_SPEAKERS,
+                    x, 0.0, z,
+                    ROLLOFF_LIN, 0.5, 5.0, 0, 0.0, 0.0,
+                    1.0, False, 0, 0.0, True,
+                )
+                ok = mgr.update_filters(self._fp)
             self._dot_np.setPos(x * r, 0, z * r)
             self._pos_lbl.setText(f"pos_3d: ({x:+.2f}, 0, {z:+.2f})  dir: {direction:+.0f}°")
-            self._ok_lbl.setText(f"update_filters: {ok}")
+            self._ok_lbl.setText(f"{self._method_name()}: {ok}")
 
         elif self._mode == "lowpass":
             cutoff = 200 + (math.sin(t) * 0.5 + 0.5) * 7800
-            self._fp.update_lowpass(0, cutoff, 1.0)
-            ok = mgr.update_filters(self._fp)
+            if self._use_configure:
+                self._fp.clear()
+                self._fp.add_lowpass(cutoff, 1.0)
+                ok = mgr.configure_filters(self._fp)
+            else:
+                self._fp.update_lowpass(0, cutoff, 1.0)
+                ok = mgr.update_filters(self._fp)
             self._dot_np.setPos(0, 0, 0)
             self._pos_lbl.setText(f"lowpass cutoff: {cutoff:.0f} Hz")
-            self._ok_lbl.setText(f"update_filters: {ok}")
+            self._ok_lbl.setText(f"{self._method_name()}: {ok}")
 
         return task.cont
 
@@ -291,6 +336,20 @@ class PanCircle(ShowBase):
     def _use_lowpass(self):
         self._mode = "lowpass"
         self._mode_lbl.setText(self._mode_text())
+        self._init_chain()
+
+    def _method_name(self):
+        return "configure_filters" if self._use_configure else "update_filters"
+
+    def _method_text(self):
+        if self._use_configure:
+            return "[F] update_filters  |  [F] configure_filters  <-- ACTIVE"
+        return "[F] update_filters  <-- ACTIVE  |  [F] configure_filters"
+
+    def _toggle_filter_method(self):
+        self._use_configure = not self._use_configure
+        self._method_lbl.setText(self._method_text())
+        # Re-init so the chain structure is correct for the new method.
         self._init_chain()
 
     def _faster(self):
