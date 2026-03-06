@@ -9,13 +9,19 @@
 # and having it walk around on uneven terrain, as well
 # as implementing a fully rotatable camera.
 
+from panda3d.core import loadPrcFileData
+loadPrcFileData("", "audio-library-name p3fmod_audio")
+loadPrcFileData("", "win-size 1280 800")
+loadPrcFileData("", "window-title Roaming Ralph - 3D Audio Demo")
+
 from direct.showbase.ShowBase import ShowBase
+from direct.showbase.Audio3DManager import Audio3DManager
 from panda3d.core import CollisionTraverser, CollisionNode
 from panda3d.core import CollisionHandlerQueue, CollisionRay
 from panda3d.core import CollisionHandlerPusher, CollisionSphere
 from panda3d.core import Filename, AmbientLight, DirectionalLight
 from panda3d.core import PandaNode, NodePath, Camera, TextNode
-from panda3d.core import CollideMask
+from panda3d.core import CollideMask, AudioSound
 from direct.gui.OnscreenText import OnscreenText
 from direct.actor.Actor import Actor
 import random
@@ -171,12 +177,50 @@ class RoamingRalphDemo(ShowBase):
         self.cTrav.addCollider(self.camGroundColNp, self.camGroundHandler)
 
         # Uncomment this line to see the collision rays
-        #self.ralphColNp.show()
-        #self.camGroundColNp.show()
+        self.ralphColNp.show()
+        self.camGroundColNp.show()
 
         # Uncomment this line to show a visual representation of the
         # collisions occuring
-        #self.cTrav.showCollisions(render)
+        self.cTrav.showCollisions(render)
+
+        # Wire collision events on the pusher so we can play a sound when
+        # Ralph bumps into an obstacle. addInPattern fires once on first contact.
+        self.ralphPusher.addInPattern("ralph-hit")
+        self.accept("ralph-hit", self.onRalphCollision)
+        self._hitCooldown = 0.0
+
+        # Set up 3D positional audio. The listener (ear) follows the camera.
+        self.audio3d = Audio3DManager(base.sfxManagerList[0], base.camera)
+        # 1.0 means 1 Panda unit = 1 metre for distance falloff calculations.
+        self.audio3d.setDistanceFactor(1.0)
+        self.audio3d.setDropOffFactor(1.0)
+
+        # Footstep sound — attached to Ralph so it moves with him.
+        # Replace sounds/footstep.mp3 with a short, loopable footstep clip.
+        self.footstepSfx = self.audio3d.loadSfx("sounds/footstep.mp3")
+        self.audio3d.attachSoundToObject(self.footstepSfx, self.ralph)
+        self.audio3d.setSoundMinDistance(self.footstepSfx, 3.0)
+        self.audio3d.setSoundMaxDistance(self.footstepSfx, 40.0)
+        self.footstepSfx.setLoop(True)
+        self.footstepSfx.setPlayRate(1.5)
+        self.footstepSfx.setVolume(0.6)
+
+        # Collision/hit sound — emitted from the surface point Ralph collided with,
+        # not from Ralph himself. This is the key 3D positional audio demo.
+        # Replace sounds/hit.mp3 with a short thud or knock clip.
+        self.hitEmitter = render.attachNewNode("hitEmitter")
+        self.hitSfx = self.audio3d.loadSfx("sounds/hit.mp3")
+        self.audio3d.attachSoundToObject(self.hitSfx, self.hitEmitter)
+        self.audio3d.setSoundMinDistance(self.hitSfx, 2.0)
+        self.audio3d.setSoundMaxDistance(self.hitSfx, 30.0)
+        self.hitSfx.setVolume(2.0)
+
+        # Ambient background sound — non-positional, loops for the whole session.
+        self.forestSfx = loader.loadSfx("sounds/forest.wav")
+        self.forestSfx.setLoop(True)
+        self.forestSfx.setVolume(0.2)
+        self.forestSfx.play()
 
         # Create some lighting
         ambientLight = AmbientLight("ambientLight")
@@ -191,6 +235,24 @@ class RoamingRalphDemo(ShowBase):
     # Records the state of the arrow keys
     def setKey(self, key, value):
         self.keyMap[key] = value
+
+    def onRalphCollision(self, entry):
+        """Play a hit sound at the collision surface point when Ralph bumps into
+        an obstacle. The sound emits from the contact point, not from Ralph,
+        demonstrating true 3D positional audio."""
+        # Skip ground-ray hits (terrain); we only care about wall/obstacle hits.
+        if entry.getIntoNode().getName() == "terrain":
+            return
+        # Debounce: avoid retriggering while Ralph holds forward into a wall.
+        now = base.clock.getRealTime()
+        if now - self._hitCooldown < 0.5:
+            return
+        self._hitCooldown = now
+
+        # Move the hit emitter to the world-space surface contact point.
+        surface_pt = entry.getSurfacePoint(render)
+        self.hitEmitter.setPos(surface_pt)
+        self.hitSfx.play()
 
     # Accepts arrow keys to move either the player or the menu cursor,
     # Also deals with grid checking and collision detection
@@ -241,6 +303,16 @@ class RoamingRalphDemo(ShowBase):
                 self.ralph.stop()
                 self.ralph.pose("walk", 5)
                 self.isMoving = False
+
+        # Manage footstep sound: play while any movement key is held, stop otherwise.
+        is_moving = (self.keyMap["forward"] or self.keyMap["backward"] or
+                     self.keyMap["left"] or self.keyMap["right"])
+        if is_moving:
+            if self.footstepSfx.status() != AudioSound.PLAYING:
+                self.footstepSfx.play()
+        else:
+            if self.footstepSfx.status() == AudioSound.PLAYING:
+                self.footstepSfx.stop()
 
         # If the camera is too far from ralph, move it closer.
         # If the camera is too close to ralph, move it farther.
