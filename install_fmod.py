@@ -23,7 +23,12 @@ TARGET_DIRS = {
     'darwin': {
         'arm64': 'darwin-libs-a',
         'x86_64': 'darwin-libs-a',
-    }
+    },
+    'linux': {
+        'x64': 'linux-libs-x64',
+        'arm64': 'linux-libs-arm64',
+        'arm': 'linux-libs-arm',
+    },
 }
 
 # Windows-specific library architecture paths (macOS uses universal binaries)
@@ -33,6 +38,14 @@ WINDOWS_LIB_ARCH_PATHS = {
     'arm64': 'arm64',
 }
 
+# Linux SDK library architecture subdirectory names (under api/core/lib/)
+LINUX_LIB_ARCH_PATHS = {
+    'x64': 'x86_64',
+    'arm64': 'arm64',
+    'arm': 'arm',
+    'x86': 'x86',
+}
+
 
 def detect_platform():
     """Detect the current platform."""
@@ -40,6 +53,8 @@ def detect_platform():
         return 'windows'
     elif sys.platform == 'darwin':
         return 'darwin'
+    elif sys.platform.startswith('linux'):
+        return 'linux'
     else:
         return 'unknown'
 
@@ -52,6 +67,8 @@ def detect_architecture():
         return 'x64'
     elif machine in ('arm64', 'aarch64'):
         return 'arm64'
+    elif machine in ('armv7l', 'armv6l', 'arm'):
+        return 'arm'
     elif machine in ('x86', 'i386', 'i686'):
         return 'x86'
     return machine
@@ -77,7 +94,7 @@ def get_fmod_paths(sdk_path, platform_type, arch):
     fmod_source = sdk_root / "api" / "core"
 
     # Construct target path
-    target_dir_name = TARGET_DIRS[platform_type].get(arch)
+    target_dir_name = TARGET_DIRS.get(platform_type, {}).get(arch)
     if not target_dir_name:
         raise ValueError(f"Unsupported architecture '{arch}' for platform '{platform_type}'")
 
@@ -124,10 +141,22 @@ def validate_source(fmod_source, platform_type, arch):
         if not lib_dir.exists():
             errors.append(f"Libraries directory not found: {lib_dir}")
         else:
-            # Check for at least one .dylib file
             dylibs = list(lib_dir.glob('*.dylib'))
             if not dylibs:
                 errors.append(f"No .dylib files found in: {lib_dir}")
+
+    elif platform_type == 'linux':
+        lib_arch = LINUX_LIB_ARCH_PATHS.get(arch)
+        if not lib_arch:
+            errors.append(f"Unsupported Linux architecture: {arch}")
+        else:
+            lib_arch_dir = fmod_source / "lib" / lib_arch
+            if not lib_arch_dir.exists():
+                errors.append(f"Libraries directory not found: {lib_arch_dir}")
+            else:
+                solibs = list(lib_arch_dir.glob('libfmod.so*'))
+                if not solibs:
+                    errors.append(f"No libfmod.so files found in: {lib_arch_dir}")
 
     return errors
 
@@ -142,6 +171,12 @@ def create_target_directories(target_base, platform_type):
             target_base / "bin"
         ]
     elif platform_type == 'darwin':
+        directories = [
+            target_base,
+            target_base / "include",
+            target_base / "lib"
+        ]
+    elif platform_type == 'linux':
         directories = [
             target_base,
             target_base / "include",
@@ -230,13 +265,53 @@ def copy_files_darwin(fmod_source, target_base):
     return stats
 
 
+def copy_files_linux(fmod_source, target_base, arch):
+    """Copy files for Linux platform."""
+    stats = {'headers': 0, 'libraries': 0, 'binaries': 0, 'errors': []}
+
+    # Copy header files flat into include/ (Panda3D uses #include <fmod.hpp>)
+    inc_source = fmod_source / "inc"
+    inc_target = target_base / "include"
+
+    for pattern in ['*.h', '*.hpp']:
+        for src_file in inc_source.glob(pattern):
+            try:
+                shutil.copy2(src_file, inc_target / src_file.name)
+                stats['headers'] += 1
+            except Exception as e:
+                stats['errors'].append(f"Error copying {src_file.name}: {e}")
+
+    # Copy .so files from the arch-specific lib subdirectory
+    lib_arch = LINUX_LIB_ARCH_PATHS[arch]
+    lib_source = fmod_source / "lib" / lib_arch
+    lib_target = target_base / "lib"
+
+    for src_file in lib_source.glob('libfmod.so*'):
+        try:
+            dst_file = lib_target / src_file.name
+            if src_file.is_symlink():
+                # Recreate the symlink rather than copying the target
+                link_target = src_file.readlink()
+                if dst_file.exists() or dst_file.is_symlink():
+                    dst_file.unlink()
+                dst_file.symlink_to(link_target)
+            else:
+                shutil.copy2(src_file, dst_file)
+            stats['libraries'] += 1
+        except Exception as e:
+            stats['errors'].append(f"Error copying {src_file.name}: {e}")
+
+    return stats
+
+
 def copy_files(platform_type, fmod_source, target_base, arch):
     """Dispatch to platform-specific copy function."""
     if platform_type == 'windows':
         return copy_files_windows(fmod_source, target_base, arch)
     elif platform_type == 'darwin':
-        # macOS uses universal binaries, arch parameter not needed
         return copy_files_darwin(fmod_source, target_base)
+    elif platform_type == 'linux':
+        return copy_files_linux(fmod_source, target_base, arch)
     else:
         raise ValueError(f"Unsupported platform: {platform_type}")
 
@@ -273,8 +348,10 @@ Examples:
   python install_fmod.py --sdk-path "C:/SDKs/FMOD Studio API Windows"
 
   # macOS from project root
-  cd ~/panda3d
   python install_fmod.py --sdk-path "FMOD Programmers API"
+
+  # Linux (auto-detected)
+  python install_fmod.py --sdk-path fmodstudioapi20312linux
         """
     )
 
@@ -288,7 +365,7 @@ Examples:
     parser.add_argument(
         '--platform',
         type=str,
-        choices=['windows', 'darwin', 'auto'],
+        choices=['windows', 'darwin', 'linux', 'auto'],
         default='auto',
         help='Target platform (default: auto-detect)'
     )
