@@ -81,6 +81,7 @@ FMODAudioManager() {
   _all_managers.insert(this);
 
   _concurrent_sound_limit = 0;
+  _cache_limit = audio_cache_limit;
 
   ////////////////////////////////////////////////////////////
   // Initialize the 3D listener (camera) attributes.
@@ -224,9 +225,18 @@ FMODAudioManager::
   // Be sure to delete associated sounds before deleting the manager!
   FMOD_RESULT result;
 
-  // Release all of our sounds
+  // Release all of our sounds.  This drives all FMODAudioSound destructors which
+  // call _release_sound_data, decrementing cache refcounts to 0 and releasing
+  // individual sounds.
   _sounds_playing.clear();
   _all_sounds.clear();
+
+  // Release all sounds sitting in the expiration queue.
+  _discard_excess_cache(0);
+  // _sound_data_cache and _sound_ref_counts are now empty for zero-refcount
+  // entries; clear any remaining state.
+  _sound_data_cache.clear();
+  _sound_ref_counts.clear();
 
   // Remove me from the managers list.
   _all_managers.erase(this);
@@ -491,7 +501,6 @@ update() {
 void FMODAudioManager::
 audio_3d_set_listener_attributes(PN_stdfloat px, PN_stdfloat py, PN_stdfloat pz, PN_stdfloat vx, PN_stdfloat vy, PN_stdfloat vz, PN_stdfloat fx, PN_stdfloat fy, PN_stdfloat fz, PN_stdfloat ux, PN_stdfloat uy, PN_stdfloat uz) {
   ReMutexHolder holder(_lock);
-  audio_debug("FMODAudioManager::audio_3d_set_listener_attributes()");
 
   FMOD_RESULT result;
 
@@ -651,36 +660,77 @@ reduce_sounds_playing_to(unsigned int count) {
 }
 
 /**
- * NOT USED FOR FMOD!!! Clears a sound out of the sound cache.
+ * Immediately evicts a sound from the expiration queue and releases it.
+ * Only affects entries currently in the queue (refcount == 0).
+ * Checks both the 2D and 3D variants of the given filename.
  */
 void FMODAudioManager::
 uncache_sound(const Filename &file_name) {
-  audio_debug("FMODAudioManager::uncache_sound(\""<<file_name<<"\")");
+  ReMutexHolder holder(_lock);
+  audio_debug("FMODAudioManager::uncache_sound(\"" << file_name << "\")");
+
+  Filename path = file_name;
+  VirtualFileSystem *vfs = VirtualFileSystem::get_global_ptr();
+  vfs->resolve_filename(path, get_model_path());
+  path.set_binary();
+
+  for (int p = 0; p <= 1; ++p) {
+    bool positional = (p == 1);
+    SoundCacheKey key{path, positional};
+    SoundDataCache::iterator ci = _sound_data_cache.find(key);
+    if (ci == _sound_data_cache.end()) continue;
+
+    FMOD::Sound *sound = ci->second;
+    SoundRefCounts::iterator ri = _sound_ref_counts.find(sound);
+    if (ri == _sound_ref_counts.end() || ri->second != 0) continue;
+
+    // Remove from expiration queue, then release.
+    ExpirationQueue::iterator ei = _expiring_sounds.begin();
+    while (ei != _expiring_sounds.end()) {
+      if (ei->_path == path && ei->_positional == positional) {
+        _expiring_sounds.erase(ei);
+        break;
+      }
+      ++ei;
+    }
+    sound->release();
+    _sound_ref_counts.erase(ri);
+    _sound_data_cache.erase(ci);
+    audio_debug("FMODAudioManager: uncache_sound evicted " << path
+                << " positional=" << positional);
+  }
 }
 
 /**
- * NOT USED FOR FMOD!!! Clear out the sound cache.
+ * Discards all zero-reference-count entries from the sound cache immediately,
+ * regardless of the cache limit.
  */
 void FMODAudioManager::
 clear_cache() {
+  ReMutexHolder holder(_lock);
   audio_debug("FMODAudioManager::clear_cache()");
+  _discard_excess_cache(0);
 }
 
 /**
- * NOT USED FOR FMOD!!! Set the number of sounds that the cache can hold.
+ * Sets the maximum number of zero-refcount sounds to keep resident in the
+ * expiration queue.  Sounds beyond this limit are released immediately.
+ * 0 keeps nothing (every sound is freed as soon as its last user releases it).
  */
 void FMODAudioManager::
 set_cache_limit(unsigned int count) {
-  audio_debug("FMODAudioManager::set_cache_limit(count="<<count<<")");
+  ReMutexHolder holder(_lock);
+  audio_debug("FMODAudioManager::set_cache_limit(count=" << count << ")");
+  _cache_limit = count;
+  _discard_excess_cache(count);
 }
 
 /**
- * NOT USED FOR FMOD!!! Gets the number of sounds that the cache can hold.
+ * Returns the maximum number of zero-refcount sounds kept in the cache.
  */
 unsigned int FMODAudioManager::
 get_cache_limit() const {
-  audio_debug("FMODAudioManager::get_cache_limit() returning ");
-  return 0;
+  return _cache_limit;
 }
 
 FMOD_RESULT FMODAudioManager::
@@ -1031,6 +1081,111 @@ release_sound(FMODAudioSound *sound) {
   AllSounds::iterator ai = _all_sounds.find(sound);
   if (ai != _all_sounds.end()) {
     _all_sounds.erase(ai);
+  }
+}
+
+/**
+ * Returns a cached FMOD::Sound* for the given resolved path and positional flag,
+ * incrementing its reference count.  Returns nullptr on cache miss.
+ * Must be called under _lock.
+ */
+FMOD::Sound *FMODAudioManager::
+_acquire_sound_data(const Filename &path, bool positional) {
+  SoundCacheKey key{path, positional};
+  SoundDataCache::iterator it = _sound_data_cache.find(key);
+  if (it == _sound_data_cache.end()) {
+    return nullptr;
+  }
+  FMOD::Sound *sound = it->second;
+  int &refs = _sound_ref_counts[sound];
+  if (refs == 0) {
+    // Sound was in the expiration queue — pull it back out.
+    ExpirationQueue::iterator ei = _expiring_sounds.begin();
+    while (ei != _expiring_sounds.end()) {
+      if (ei->_path == path && ei->_positional == positional) {
+        _expiring_sounds.erase(ei);
+        break;
+      }
+      ++ei;
+    }
+  }
+  refs++;
+  audio_debug("FMODAudioManager: cache HIT " << path
+              << " positional=" << positional << " refs=" << refs);
+  return sound;
+}
+
+/**
+ * Registers a successfully preloaded FMOD::Sound* in the cache with refcount 1.
+ * Only call for sounds where preload succeeded and the file is not MIDI.
+ * Must be called under _lock.
+ */
+void FMODAudioManager::
+_register_sound_data(const Filename &path, bool positional, FMOD::Sound *sound) {
+  // Each instance sharing a cached sound applies its own loop/priority/distance
+  // to its own FMOD::Channel* at play time.  The FMOD::Sound* itself is treated
+  // as an immutable audio buffer after registration.
+  _sound_data_cache[SoundCacheKey{path, positional}] = sound;
+  _sound_ref_counts[sound] = 1;
+  audio_debug("FMODAudioManager: cache STORE " << path
+              << " positional=" << positional);
+}
+
+/**
+ * Decrements the reference count for the given sound.  When the count reaches
+ * zero the sound is moved into the expiration queue instead of being released
+ * immediately.  discard_excess_cache() handles the actual FMOD release when
+ * the queue exceeds _cache_limit.
+ * Handles both cached and non-cached (streaming/blank) sounds.
+ * Must be called under _lock.
+ */
+void FMODAudioManager::
+_release_sound_data(FMOD::Sound *sound, const Filename &path, bool positional) {
+  SoundRefCounts::iterator ri = _sound_ref_counts.find(sound);
+  if (ri == _sound_ref_counts.end()) {
+    // Not a cached sound (streaming or blank error fallback) — release directly.
+    FMOD_RESULT result = sound->release();
+    fmod_audio_errcheck("_sound->release() [uncached]", result);
+    return;
+  }
+
+  ri->second--;
+  audio_debug("FMODAudioManager: sound release " << path
+              << " positional=" << positional << " refs=" << ri->second);
+  if (ri->second > 0) {
+    return; // still in use by other FMODAudioSound instances
+  }
+
+  // Refcount reached 0: move to expiration queue (LRU tail).
+  _expiring_sounds.push_back(SoundCacheKey{path, positional});
+  audio_debug("FMODAudioManager: cache EXPIRE (queued) " << path
+              << " positional=" << positional
+              << " queue_size=" << _expiring_sounds.size());
+
+  _discard_excess_cache(_cache_limit);
+}
+
+/**
+ * Frees zero-refcount cached sounds from the front of the expiration queue
+ * until the queue size is at or below the given limit.
+ * Must be called under _lock.
+ */
+void FMODAudioManager::
+_discard_excess_cache(unsigned int limit) {
+  while (_expiring_sounds.size() > limit) {
+    const SoundCacheKey &key = _expiring_sounds.front();
+
+    SoundDataCache::iterator ci = _sound_data_cache.find(key);
+    if (ci != _sound_data_cache.end()) {
+      FMOD::Sound *sound = ci->second;
+      nassertv(_sound_ref_counts[sound] == 0);
+      audio_debug("FMODAudioManager: cache RELEASE " << key._path
+                  << " positional=" << key._positional);
+      sound->release();
+      _sound_ref_counts.erase(sound);
+      _sound_data_cache.erase(ci);
+    }
+    _expiring_sounds.pop_front();
   }
 }
 

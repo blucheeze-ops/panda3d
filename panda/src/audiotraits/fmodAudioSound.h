@@ -177,11 +177,17 @@ private:
   PN_stdfloat _min_dist;
   PN_stdfloat _max_dist;
 
+  unsigned long _loop_count;    // 0=infinite, 1=play once, n=play n times
+  unsigned int  _loop_start_ms; // loop start point in milliseconds
+
   void start_playing();
   void set_volume_on_channel();
   void set_balance_on_channel();
   void set_play_rate_on_channel();
   void set_3d_attributes_on_channel();
+  void set_3d_min_max_on_channel();
+  void set_loop_on_channel();
+  void set_loop_start_on_channel();
   // void add_dsp_on_channel();
   void set_speaker_mix_or_balance_on_channel();
 

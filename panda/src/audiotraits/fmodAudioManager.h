@@ -69,6 +69,7 @@
 
 // First the includes.
 #include "pandabase.h"
+#include "pmap.h"
 #include "pset.h"
 #include "pdeque.h"
 
@@ -177,6 +178,12 @@ private:
 
   void update_sounds();
 
+  // Sound data cache helpers — all must be called under _lock.
+  FMOD::Sound *_acquire_sound_data(const Filename &path, bool positional);
+  void _register_sound_data(const Filename &path, bool positional, FMOD::Sound *sound);
+  void _release_sound_data(FMOD::Sound *sound, const Filename &path, bool positional);
+  void _discard_excess_cache(unsigned int limit);
+
 private:
   // This global lock protects all access to FMod library interfaces.
   static ReMutex _lock;
@@ -216,6 +223,31 @@ private:
   FMOD_OUTPUTTYPE _saved_outputtype;
 
   unsigned int _concurrent_sound_limit;
+
+  // Cache of FMOD::Sound* for preloaded sounds, keyed by (resolved_path, positional).
+  // 2D and 3D variants of the same file are cached separately because the FMOD_3D/FMOD_2D
+  // flag is baked into the FMOD::Sound at createSound() time.
+  struct SoundCacheKey {
+    Filename _path;
+    bool     _positional;
+    bool operator<(const SoundCacheKey &o) const {
+      if (_path != o._path) return _path < o._path;
+      return (int)_positional < (int)o._positional;
+    }
+  };
+  typedef pmap<SoundCacheKey, FMOD::Sound *> SoundDataCache;
+  SoundDataCache _sound_data_cache;
+
+  typedef pmap<FMOD::Sound *, int> SoundRefCounts;
+  SoundRefCounts _sound_ref_counts;
+
+  // Zero-refcount cached sounds are moved here (LRU order) instead of being
+  // freed immediately.  discard_excess_cache() frees entries from the front
+  // when the queue exceeds _cache_limit.  0 = unlimited.
+  typedef pdeque<SoundCacheKey> ExpirationQueue;
+  ExpirationQueue _expiring_sounds;
+
+  unsigned int _cache_limit;
 
 public:
   static TypeHandle get_class_type() {

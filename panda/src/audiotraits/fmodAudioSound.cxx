@@ -63,13 +63,16 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
   _min_dist = 1.0;
   _max_dist = 1000000000.0;
 
+  _loop_count = 1;
+  _loop_start_ms = 0;
+
   // These set the speaker levels to a default if you are using a multichannel
   // setup.
   for (int i = 0; i < AudioManager::SPK_COUNT; i++) {
     _mix[i] = 1.0;
   }
 
-  FMOD_RESULT result;
+  FMOD_RESULT result = FMOD_OK;
 
   // Assign the values we need
   FMODAudioManager *fmanager;
@@ -84,8 +87,32 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
   result = _manager->get_speaker_mode(_speakermode);
   fmod_audio_errcheck("_system->getSpeakerMode()", result);
 
+  // Determine if we will preload this file into memory.  Only preloaded,
+  // non-MIDI sounds can be shared via the cache; streaming sounds hold an
+  // open file handle and cannot be safely shared across instances.
+  bool preload = (fmod_audio_preload_threshold < 0) ||
+                 (file->get_file_size() < fmod_audio_preload_threshold);
+
+  // Check if the extension is MIDI before we try the cache.
   {
-    bool preload = (fmod_audio_preload_threshold < 0) || (file->get_file_size() < fmod_audio_preload_threshold);
+    std::string ext = downcase(_file_name.get_extension());
+    if (ext == "mid") {
+      _is_midi = true;
+    }
+  }
+
+  // Try to acquire a cached FMOD::Sound* to avoid redundant file I/O.
+  // MIDI files are excluded because their FMOD::Sound* holds tempo/loop state
+  // that is mutated per-instance by set_play_rate_on_channel().
+  _sound = nullptr;
+  bool _from_cache = false;
+  if (preload && !_is_midi) {
+    _sound = _manager->_acquire_sound_data(_file_name, positional);
+    _from_cache = (_sound != nullptr);
+  }
+
+  if (_sound == nullptr) {
+    // No cached sound found — load from disk.
     int flags = FMOD_DEFAULT;
     flags |= positional ? FMOD_3D : FMOD_2D;
 
@@ -100,7 +127,6 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
       if (sound_info.dlsname != nullptr) {
         audio_debug("Using DLS file " << sound_info.dlsname);
       }
-      _is_midi = true;
       // Need this flag so we can correctly query the length of MIDIs.
       flags |= FMOD_ACCURATETIME;
     } else if (ext == "mp3") {
@@ -130,6 +156,12 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
       }
       result =
         _manager->_system->createSound(name_or_data, flags, &sound_info, &_sound);
+
+      // Register successful preloads (non-MIDI only) in the cache so future
+      // instances of the same file can share this FMOD::Sound*.
+      if (result == FMOD_OK && !_is_midi) {
+        _manager->_register_sound_data(_file_name, positional, _sound);
+      }
     }
     else {
       result = FMOD_ERR_FILE_BAD;
@@ -185,7 +217,7 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
   #endif
       }
     }
-  }
+  } // end if (_sound == nullptr)
 
   if (result != FMOD_OK) {
     audio_error("createSound(" << _file_name << "): " << FMOD_ErrorString(result));
@@ -207,9 +239,12 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
   }
 
   // Some WAV files contain a loop bit.  This is not handled consistently.
-  // Override it.
-  _sound->setLoopCount(1);
-  _sound->setMode(FMOD_LOOP_OFF);
+  // Override it.  Skip on cache hits — the sound already has these defaults
+  // set from when it was first loaded.
+  if (!_from_cache && result == FMOD_OK) {
+    _sound->setLoopCount(1);
+    _sound->setMode(FMOD_LOOP_OFF);
+  }
 
   // This is just to collect the defaults of the sound, so we don't Have to
   // query FMOD everytime for the info.  It is also important we get the
@@ -234,12 +269,12 @@ FMODAudioSound(AudioManager *manager, VirtualFile *file, bool positional) : Audi
 FMODAudioSound::
 ~FMODAudioSound() {
   ReMutexHolder holder(FMODAudioManager::_lock);
-  FMOD_RESULT result;
 
-  // Release the sound.  There is no need to release the channel, it will be
-  // reused for future sounds.
-  result = _sound->release();
-  fmod_audio_errcheck("_sound->release()", result);
+  // Delegate sound release to the manager's cache.  For cached sounds this
+  // decrements the refcount and only releases the FMOD::Sound* when it reaches
+  // zero.  For non-cached sounds (streaming, MIDI, blank fallback) this releases
+  // directly.  There is no need to release the channel; it will be reused.
+  _manager->_release_sound_data(_sound, _file_name, is_positional());
 
   audio_debug("Released FMODAudioSound\n");
 
@@ -297,29 +332,37 @@ get_loop() const {
 void FMODAudioSound::
 set_loop_count(unsigned long loop_count) {
   ReMutexHolder holder(FMODAudioManager::_lock);
-  audio_debug("FMODAudioSound::set_loop_count()   Setting the sound's loop count to: " << loop_count);
+  _loop_count = loop_count;
+  set_loop_on_channel();
+}
 
-  // LOCALS
+/**
+ * Applies the per-instance loop count and mode to this sound's channel.
+ * Channel-level so multiple FMODAudioSounds sharing a FMOD::Sound* can each
+ * have independent loop settings.
+ */
+void FMODAudioSound::
+set_loop_on_channel() {
+  ReMutexHolder holder(FMODAudioManager::_lock);
+  if (!_channel) return;
+
   FMOD_RESULT result;
+  int fmod_count = (_loop_count == 0) ? -1 : (int)_loop_count;
+  FMOD_MODE mode = (_loop_count == 1) ? FMOD_LOOP_OFF : FMOD_LOOP_NORMAL;
 
-  if (loop_count == 0) {
-    result = _sound->setLoopCount(-1);
-    fmod_audio_errcheck("_sound->setLoopCount()", result);
-    result =_sound->setMode(FMOD_LOOP_NORMAL);
-    fmod_audio_errcheck("_sound->setMode()", result);
-  } else if (loop_count == 1) {
-    result = _sound->setLoopCount(1);
-    fmod_audio_errcheck("_sound->setLoopCount()", result);
-    result =_sound->setMode(FMOD_LOOP_OFF);
-    fmod_audio_errcheck("_sound->setMode()", result);
-  } else {
-    result = _sound->setLoopCount(loop_count);
-    fmod_audio_errcheck("_sound->setLoopCount()", result);
-    result =_sound->setMode(FMOD_LOOP_NORMAL);
-    fmod_audio_errcheck("_sound->setMode()", result);
+  result = _channel->setLoopCount(fmod_count);
+  if (result == FMOD_ERR_INVALID_HANDLE || result == FMOD_ERR_CHANNEL_STOLEN) {
+    _channel = nullptr;
+    return;
   }
+  fmod_audio_errcheck("_channel->setLoopCount()", result);
 
-  audio_debug("FMODAudioSound::set_loop_count()   Sound's loop count should be set to: " << loop_count);
+  result = _channel->setMode(mode);
+  if (result == FMOD_ERR_INVALID_HANDLE || result == FMOD_ERR_CHANNEL_STOLEN) {
+    _channel = nullptr;
+    return;
+  }
+  fmod_audio_errcheck("_channel->setMode()", result);
 }
 
 /**
@@ -327,18 +370,7 @@ set_loop_count(unsigned long loop_count) {
  */
 unsigned long FMODAudioSound::
 get_loop_count() const {
-  ReMutexHolder holder(FMODAudioManager::_lock);
-  FMOD_RESULT result;
-  int loop_count;
-
-  result = _sound->getLoopCount(&loop_count);
-  fmod_audio_errcheck("_sound->getLoopCount()", result);
-
-  if (loop_count <= 0) {
-    return 0;
-  } else {
-    return (unsigned long)loop_count;
-  }
+  return _loop_count;
 }
 
 /**
@@ -350,22 +382,34 @@ set_loop_start(PN_stdfloat loop_start) {
   ReMutexHolder holder(FMODAudioManager::_lock);
   audio_debug("FMODAudioSound::set_loop_start()   Setting the sound's loop start to: " << loop_start);
 
-  FMOD_RESULT result;
-  unsigned int length;
-
-  result = _sound->getLength(&length, FMOD_TIMEUNIT_MS);
-  fmod_audio_errcheck("_sound->getLength()", result);
-
-  unsigned int loop_start_int = (unsigned int) (loop_start * 1000.0);
-
-  if (loop_start_int >= length) {
+  unsigned int loop_start_int = (unsigned int)(loop_start * 1000.0);
+  if (loop_start_int >= _length) {
     audio_debug("FMODAudioSound::set_loop_start()   Would loop after end of track, setting start to 0");
     loop_start_int = 0;
   }
+  _loop_start_ms = loop_start_int;
 
-  result = _sound->setLoopPoints(loop_start_int, FMOD_TIMEUNIT_MS, length, FMOD_TIMEUNIT_MS);
-  fmod_audio_errcheck("_sound->setLoopPoints()", result);
+  set_loop_start_on_channel();
   audio_debug("FMODAudioSound::set_loop_start()   Sound's loop start should be set to: " << loop_start);
+}
+
+/**
+ * Applies the per-instance loop start point to this sound's channel.
+ * Channel-level so multiple FMODAudioSounds sharing a FMOD::Sound* can each
+ * have independent loop start points.
+ */
+void FMODAudioSound::
+set_loop_start_on_channel() {
+  ReMutexHolder holder(FMODAudioManager::_lock);
+  if (!_channel || _length == 0 || _loop_count == 1) return;
+
+  FMOD_RESULT result = _channel->setLoopPoints(_loop_start_ms, FMOD_TIMEUNIT_MS,
+                                               _length, FMOD_TIMEUNIT_MS);
+  if (result == FMOD_ERR_INVALID_HANDLE || result == FMOD_ERR_CHANNEL_STOLEN) {
+    _channel = nullptr;
+  } else {
+    fmod_audio_errcheck("_channel->setLoopPoints()", result);
+  }
 }
 
 /**
@@ -374,14 +418,7 @@ set_loop_start(PN_stdfloat loop_start) {
  */
 PN_stdfloat FMODAudioSound::
 get_loop_start() const {
-  ReMutexHolder holder(FMODAudioManager::_lock);
-  FMOD_RESULT result;
-  unsigned int loop_start;
-
-  result = _sound->getLoopPoints(&loop_start, FMOD_TIMEUNIT_MS, nullptr, FMOD_TIMEUNIT_MS);
-  fmod_audio_errcheck("_sound->getLoopPoints()", result);
-
-  return ((double)loop_start) / 1000.0;
+  return ((double)_loop_start_ms) / 1000.0;
 }
 
 /**
@@ -484,6 +521,12 @@ start_playing() {
     set_play_rate_on_channel();
     set_speaker_mix_or_balance_on_channel();
     set_3d_attributes_on_channel();
+    set_3d_min_max_on_channel();
+    set_loop_on_channel();
+    set_loop_start_on_channel();
+    if (_channel) {
+      _channel->setPriority(_priority);
+    }
 
     result = _channel->setPaused(false);
     fmod_audio_errcheck("_channel->setPaused()", result);
@@ -664,18 +707,38 @@ get_3d_attributes(PN_stdfloat *px, PN_stdfloat *py, PN_stdfloat *pz, PN_stdfloat
 }
 
 /**
+ * Applies the per-instance 3D min/max distance to this sound's channel.
+ * This is channel-level (not sound-level) so multiple FMODAudioSounds sharing
+ * the same FMOD::Sound* can each have independent attenuation distances.
+ */
+void FMODAudioSound::
+set_3d_min_max_on_channel() {
+  ReMutexHolder holder(FMODAudioManager::_lock);
+  FMOD_RESULT result;
+  FMOD_MODE soundMode;
+
+  result = _sound->getMode(&soundMode);
+  fmod_audio_errcheck("_sound->getMode()", result);
+
+  if ((_channel) && (soundMode & FMOD_3D)) {
+    result = _channel->set3DMinMaxDistance(_min_dist, _max_dist);
+    if (result == FMOD_ERR_INVALID_HANDLE || result == FMOD_ERR_CHANNEL_STOLEN) {
+      _channel = nullptr;
+    } else {
+      fmod_audio_errcheck("_channel->set3DMinMaxDistance()", result);
+    }
+  }
+}
+
+/**
  * Set the distance that this sound begins to fall off.  Also affects the rate
  * it falls off.
  */
 void FMODAudioSound::
 set_3d_min_distance(PN_stdfloat dist) {
   ReMutexHolder holder(FMODAudioManager::_lock);
-  FMOD_RESULT result;
-
   _min_dist = dist;
-
-  result = _sound->set3DMinMaxDistance(dist, _max_dist);
-  fmod_audio_errcheck("_sound->set3DMinMaxDistance()", result);
+  set_3d_min_max_on_channel();
 }
 
 /**
@@ -692,12 +755,8 @@ get_3d_min_distance() const {
 void FMODAudioSound::
 set_3d_max_distance(PN_stdfloat dist) {
   ReMutexHolder holder(FMODAudioManager::_lock);
-  FMOD_RESULT result;
-
   _max_dist = dist;
-
-  result = _sound->set3DMinMaxDistance(_min_dist, dist);
-  fmod_audio_errcheck("_sound->set3DMinMaxDistance()", result);
+  set_3d_min_max_on_channel();
 }
 
 /**
@@ -832,12 +891,16 @@ set_priority(int priority) {
 
   audio_debug("FMODAudioSound::set_priority()");
 
-  FMOD_RESULT result;
-
   _priority = priority;
 
-  result = _sound->setDefaults(_sample_frequency, _priority);
-  fmod_audio_errcheck("_sound->setDefaults()", result);
+  if (_channel) {
+    FMOD_RESULT result = _channel->setPriority(_priority);
+    if (result == FMOD_ERR_INVALID_HANDLE || result == FMOD_ERR_CHANNEL_STOLEN) {
+      _channel = nullptr;
+    } else {
+      fmod_audio_errcheck("_channel->setPriority()", result);
+    }
+  }
 }
 
 /**
