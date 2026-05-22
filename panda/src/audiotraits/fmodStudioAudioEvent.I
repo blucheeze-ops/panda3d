@@ -6,19 +6,9 @@
  * license.  You should have received a copy of this license along
  * with this source code in a file named "LICENSE."
  *
- * @file audio.h
- * @author frang
- * @date 2000-07-06
+ * @file fmodStudioAudioEvent.I
+ * @author jovan
+ * @date 2026-04-13
  */
 
-#ifndef AUDIO_H
-#define AUDIO_H
-
-#include "filterProperties.h"
-#include "audioLoadRequest.h"
-#include "audioSound.h"
-#include "audioManager.h"
-#include "studioAudioEvent.h"
-#include "studioAudioManager.h"
-
-#endif /* AUDIO_H */
+// Currently empty — inline methods may be added here in the future.

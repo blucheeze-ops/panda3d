@@ -1,6 +1,6 @@
 if(NOT HAVE_AUDIO)
   return()
-elseif(NOT HAVE_FMOD AND NOT HAVE_OPENAL)
+elseif(NOT HAVE_FMOD AND NOT HAVE_FMOD_STUDIO AND NOT HAVE_OPENAL)
   message(SEND_ERROR
     "You must have an audio backend for audio support! Turn off HAVE_AUDIO to ignore this.")
 endif()
@@ -42,6 +42,33 @@ if(HAVE_FMOD AND NOT (APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"))
   install(FILES ${P3FMOD_HEADERS} COMPONENT FMODDevel DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/panda3d)
 
   export_targets(FMOD NAMESPACE "Panda3D::FMOD::" COMPONENT FMODDevel)
+endif()
+
+if(HAVE_FMOD_STUDIO)
+  set(P3FMOD_STUDIO_HEADERS
+    config_fmodStudioAudio.h
+    fmodStudioAudioManager.h
+    fmodStudioAudioEvent.I fmodStudioAudioEvent.h
+  )
+
+  set(P3FMOD_STUDIO_SOURCES
+    config_fmodStudioAudio.cxx fmodStudioAudioManager.cxx fmodStudioAudioEvent.cxx
+  )
+
+  composite_sources(p3fmod_studio_audio P3FMOD_STUDIO_SOURCES)
+  add_library(p3fmod_studio_audio ${MODULE_TYPE} ${P3FMOD_STUDIO_HEADERS} ${P3FMOD_STUDIO_SOURCES})
+  set_target_properties(p3fmod_studio_audio PROPERTIES DEFINE_SYMBOL BUILDING_FMOD_STUDIO_AUDIO)
+  target_link_libraries(p3fmod_studio_audio panda PKG::FMOD PKG::FMOD_STUDIO)
+
+  install(TARGETS p3fmod_studio_audio
+    EXPORT FMOD_STUDIO COMPONENT FMOD_STUDIO
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/panda3d
+    ARCHIVE COMPONENT FMOD_STUDIODevel)
+  install(FILES ${P3FMOD_STUDIO_HEADERS} COMPONENT FMOD_STUDIODevel DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/panda3d)
+
+  export_targets(FMOD_STUDIO NAMESPACE "Panda3D::FMOD_STUDIO::" COMPONENT FMOD_STUDIODevel)
 endif()
 
 if(HAVE_OPENAL)

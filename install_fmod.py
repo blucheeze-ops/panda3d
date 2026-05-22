@@ -74,14 +74,15 @@ def detect_architecture():
     return machine
 
 
-def get_fmod_paths(sdk_path, platform_type, arch):
+def get_fmod_paths(sdk_path, platform_type, arch, api_type="core"):
     """
     Construct FMOD SDK source paths.
 
     Args:
-        sdk_path: Path to FMOD SDK root (contains api/core/)
+        sdk_path: Path to FMOD SDK root (contains api/core/ and api/studio/)
         platform_type: 'windows' or 'darwin'
         arch: 'x64', 'arm64', etc. (ignored for macOS universal binaries)
+        api_type: 'core' or 'studio'
 
     Returns:
         tuple: (fmod_source_path, target_base_path)
@@ -90,8 +91,8 @@ def get_fmod_paths(sdk_path, platform_type, arch):
     sdk_path = sdk_path.rstrip('/\\').rstrip('"').rstrip("'")
     sdk_root = Path(sdk_path).resolve()
 
-    # Construct source path - sdk_path should contain api/core/
-    fmod_source = sdk_root / "api" / "core"
+    # Construct source path
+    fmod_source = sdk_root / "api" / api_type
 
     # Construct target path
     target_dir_name = TARGET_DIRS.get(platform_type, {}).get(arch)
@@ -99,7 +100,8 @@ def get_fmod_paths(sdk_path, platform_type, arch):
         raise ValueError(f"Unsupported architecture '{arch}' for platform '{platform_type}'")
 
     repo_root = Path(__file__).parent.absolute()
-    target_base = repo_root / "thirdparty" / target_dir_name / "fmod"
+    target_name = "fmod" if api_type == "core" else "fmod_studio"
+    target_base = repo_root / "thirdparty" / target_dir_name / target_name
 
     return fmod_source, target_base
 
@@ -380,7 +382,7 @@ Examples:
 
     args = parser.parse_args()
 
-    print("FMOD Core API Cross-Platform Installation Script")
+    print("FMOD Core + Studio API Cross-Platform Installation Script")
     print("-" * 60)
 
     # Detect platform and architecture
@@ -396,54 +398,73 @@ Examples:
         print("ERROR: Unsupported platform", file=sys.stderr)
         return 1
 
-    # Get paths
-    try:
-        fmod_source, target_base = get_fmod_paths(args.sdk_path, platform_type, arch)
-    except ValueError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 1
+    all_success = True
 
-    # Validate source
-    print("Validating source files...")
-    errors = validate_source(fmod_source, platform_type, arch)
-    if errors:
-        print("ERROR: Source validation failed:", file=sys.stderr)
-        for error in errors:
-            print(f"  {error}", file=sys.stderr)
-        return 1
-    print("[OK] Source validation passed")
+    for api_type in ("core", "studio"):
+        print(f"\n--- Installing FMOD {api_type.capitalize()} API ---")
 
-    # Create target directories
-    print("\nCreating target directories...")
-    try:
-        create_target_directories(target_base, platform_type)
-        print("[OK] Directories created")
-    except Exception as e:
-        print(f"ERROR: Failed to create directories: {e}", file=sys.stderr)
-        return 1
+        # Get paths
+        try:
+            fmod_source, target_base = get_fmod_paths(args.sdk_path, platform_type, arch, api_type)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
 
-    # Copy files
-    print("\nCopying files...")
-    stats = copy_files(platform_type, fmod_source, target_base, arch)
+        # Check if this API exists in the SDK
+        if not fmod_source.exists():
+            if api_type == "studio":
+                print(f"Studio API not found at {fmod_source}, skipping.")
+                continue
+            else:
+                print(f"ERROR: Core API not found at {fmod_source}", file=sys.stderr)
+                return 1
 
-    # Print results
-    if stats['headers'] > 0:
-        print(f"[OK] Copied {stats['headers']} header files")
-    if stats['libraries'] > 0:
-        print(f"[OK] Copied {stats['libraries']} library files")
-    if stats['binaries'] > 0:
-        print(f"[OK] Copied {stats['binaries']} DLL files")
+        # Validate source
+        print("Validating source files...")
+        errors = validate_source(fmod_source, platform_type, arch)
+        if errors:
+            print(f"ERROR: Source validation failed for {api_type}:", file=sys.stderr)
+            for error in errors:
+                print(f"  {error}", file=sys.stderr)
+            if api_type == "core":
+                return 1
+            continue
+        print("[OK] Source validation passed")
 
-    # Print any errors
-    if stats['errors']:
-        print("\nErrors encountered:", file=sys.stderr)
-        for error in stats['errors']:
-            print(f"  {error}", file=sys.stderr)
+        # Create target directories
+        print("\nCreating target directories...")
+        try:
+            create_target_directories(target_base, platform_type)
+            print("[OK] Directories created")
+        except Exception as e:
+            print(f"ERROR: Failed to create directories: {e}", file=sys.stderr)
+            all_success = False
+            continue
 
-    # Print summary
-    success = print_summary(stats, platform_type, arch, target_base)
+        # Copy files
+        print("\nCopying files...")
+        stats = copy_files(platform_type, fmod_source, target_base, arch)
 
-    return 0 if success else 1
+        # Print results
+        if stats['headers'] > 0:
+            print(f"[OK] Copied {stats['headers']} header files")
+        if stats['libraries'] > 0:
+            print(f"[OK] Copied {stats['libraries']} library files")
+        if stats['binaries'] > 0:
+            print(f"[OK] Copied {stats['binaries']} DLL files")
+
+        # Print any errors
+        if stats['errors']:
+            print("\nErrors encountered:", file=sys.stderr)
+            for error in stats['errors']:
+                print(f"  {error}", file=sys.stderr)
+
+        # Print summary
+        success = print_summary(stats, platform_type, arch, target_base)
+        if not success:
+            all_success = False
+
+    return 0 if all_success else 1
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@
 #include "audioSound.h"
 #include "nullAudioManager.h"
 #include "nullAudioSound.h"
+#include "studioAudioManager.h"
+#include "studioAudioEvent.h"
 #include "string_utils.h"
 
 #if !defined(CPPPARSER) && !defined(LINK_ALL_STATIC) && !defined(BUILDING_PANDA_AUDIO)
@@ -127,6 +129,8 @@ ConfigureFn(config_audio) {
   AudioSound::init_type();
   NullAudioManager::init_type();
   NullAudioSound::init_type();
+  StudioAudioManager::init_type();
+  StudioAudioEvent::init_type();
 }
 
 ostream &

@@ -5,3 +5,5 @@
 #include "audioSound.cxx"
 #include "nullAudioManager.cxx"
 #include "nullAudioSound.cxx"
+#include "studioAudioManager.cxx"
+#include "studioAudioEvent.cxx"

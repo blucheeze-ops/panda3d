@@ -21,6 +21,8 @@ set(P3AUDIO_HEADERS
   normalizeDSP.h normalizeDSP.I
   nullAudioManager.h
   nullAudioSound.h
+  studioAudioManager.h
+  studioAudioEvent.h
   oscillatorDSP.h oscillatorDSP.I
   paramEQDSP.h paramEQDSP.I
   pitchShiftDSP.h pitchShiftDSP.I
@@ -46,6 +48,8 @@ set(P3AUDIO_SOURCES
   normalizeDSP.cxx
   nullAudioManager.cxx
   nullAudioSound.cxx
+  studioAudioManager.cxx
+  studioAudioEvent.cxx
   oscillatorDSP.cxx
   paramEQDSP.cxx
   pitchShiftDSP.cxx

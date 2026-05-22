@@ -81,7 +81,7 @@ PkgListSet(["PYTHON", "DIRECT",                        # Python support
   "GL", "GLES", "GLES2"] + DXVERSIONS + ["TINYDISPLAY", "NVIDIACG", # 3D graphics
   "EGL",                                               # OpenGL (ES) integration
   "EIGEN",                                             # Linear algebra acceleration
-  "OPENAL", "FMOD",                                    # Audio playback
+  "OPENAL", "FMOD", "FMOD_STUDIO",                      # Audio playback
   "VORBIS", "OPUS", "FFMPEG", "SWSCALE", "SWRESAMPLE", # Audio decoding
   "ODE", "BULLET", "PANDAPHYSICS",                     # Physics
   "SPEEDTREE",                                         # SpeedTree
@@ -752,6 +752,8 @@ if (COMPILER == "MSVC"):
         DefSymbol("ODE",    "dSINGLE", "")
     if (PkgSkip("FMOD")==0):
         LibName("FMOD",     GetThirdpartyDir() + "fmod/lib/fmod_vc.lib")
+    if (PkgSkip("FMOD_STUDIO")==0):
+        LibName("FMOD_STUDIO", GetThirdpartyDir() + "fmod_studio/lib/fmodstudio_vc.lib")
     if (PkgSkip("VORBIS")==0):
         for lib in ('ogg', 'vorbis', 'vorbisfile'):
             path = GetThirdpartyDir() + "vorbis/lib/lib{0}_static.lib".format(lib)
@@ -850,6 +852,7 @@ if (COMPILER=="GCC"):
     SmartPkgEnable("SWRESAMPLE","libswresample", "libswresample", ("libswresample/swresample.h"), target_pkg = "FFMPEG", thirdparty_dir = "ffmpeg")
     SmartPkgEnable("FFTW",      "fftw3",     ("fftw3"), ("fftw.h"))
     SmartPkgEnable("FMOD",  "",              ("fmod"), ("fmod", "fmod/fmod.h"))
+    SmartPkgEnable("FMOD_STUDIO", "", ("fmodstudio"), ("fmod_studio", "fmod_studio/fmod_studio.hpp"), thirdparty_dir="fmod_studio")
     SmartPkgEnable("NVIDIACG",  "",          ("Cg"), "Cg/cg.h", framework = "Cg")
     SmartPkgEnable("ODE",       "",          ("ode"), "ode/ode.h", tool = "ode-config")
     SmartPkgEnable("SQUISH",    "",          ("squish"), "squish.h")
@@ -4400,6 +4403,13 @@ if PkgSkip("FMOD") == 0:
     TargetAdd('libp3fmod_audio.dll', input='fmod_audio_fmod_audio_composite1.obj')
     TargetAdd('libp3fmod_audio.dll', input=COMMON_PANDA_LIBS)
     TargetAdd('libp3fmod_audio.dll', opts=['MODULE', 'ADVAPI', 'WINUSER', 'WINMM', 'FMOD'])
+
+if PkgSkip("FMOD_STUDIO") == 0:
+    OPTS=['DIR:panda/src/audiotraits', 'BUILDING:FMOD_STUDIO_AUDIO', 'FMOD', 'FMOD_STUDIO']
+    TargetAdd('fmod_studio_audio_fmod_studio_audio_composite1.obj', opts=OPTS, input='fmod_studio_audio_composite1.cxx')
+    TargetAdd('libp3fmod_studio_audio.dll', input='fmod_studio_audio_fmod_studio_audio_composite1.obj')
+    TargetAdd('libp3fmod_studio_audio.dll', input=COMMON_PANDA_LIBS)
+    TargetAdd('libp3fmod_studio_audio.dll', opts=['MODULE', 'ADVAPI', 'WINUSER', 'WINMM', 'FMOD', 'FMOD_STUDIO'])
 
 if PkgSkip("OPENAL") == 0:
     OPTS=['DIR:panda/src/audiotraits', 'BUILDING:OPENAL_AUDIO', 'OPENAL']
